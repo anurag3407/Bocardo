@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Bocardo Rider",
+    "slug": "bocardo-rider",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "bocardo-rider",
+    "splash": {
+      "backgroundColor": "#FC8019"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "in.bocardo.rider",
+      "infoPlist": {
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FC8019"
+      },
+      "package": "in.bocardo.rider",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Bocardo Food",
+    "slug": "bocardo-customer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "bocardo-customer",
+    "splash": {
+      "backgroundColor": "#FC8019"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "in.bocardo.customer"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FC8019"
+      },
+      "package": "in.bocardo.customer"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"]
+  }
+}

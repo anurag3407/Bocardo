@@ -1,0 +1,35 @@
+{
+  "name": "@bocardo/api",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts src/server.ts --format cjs --dts",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bocardo/database": "workspace:*",
+    "@bocardo/shared-types": "workspace:*",
+    "@fastify/cors": "^9.0.1",
+    "@trpc/server": "^11.0.0-rc.446",
+    "bullmq": "^5.12.12",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "razorpay": "^2.9.4",
+    "socket.io": "^4.7.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@bocardo/typescript-config": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^22.5.4",
+    "tsup": "^8.2.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

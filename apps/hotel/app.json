@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Bocardo Partner (KOT)",
+    "slug": "bocardo-hotel",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "bocardo-hotel",
+    "splash": {
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.bocardo.hotel"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0F172A"
+      },
+      "package": "in.bocardo.hotel"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"]
+  }
+}

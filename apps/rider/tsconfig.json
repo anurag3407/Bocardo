@@ -1,0 +1,10 @@
+{
+  "extends": "@bocardo/typescript-config/react-native.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*", "expo-env.d.ts"]
+}
