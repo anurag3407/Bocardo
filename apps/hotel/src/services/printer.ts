@@ -10,11 +10,13 @@ export interface KotPrintJob {
 
 type PrinterStatus = 'CONNECTED' | 'DISCONNECTED' | 'PAPER_JAM';
 type PrinterListener = (status: PrinterStatus, queueCount: number) => void;
+export type PrinterTransport = (content: string) => Promise<void>;
 
 class ThermalPrinterService {
   private status: PrinterStatus = 'CONNECTED';
   private printQueue: KotPrintJob[] = [];
   private listeners = new Set<PrinterListener>();
+  private transport: PrinterTransport = async () => {};
 
   subscribe(listener: PrinterListener) {
     this.listeners.add(listener);
@@ -26,6 +28,10 @@ class ThermalPrinterService {
 
   private notify() {
     this.listeners.forEach((l) => l(this.status, this.printQueue.length));
+  }
+
+  setTransport(transport: PrinterTransport) {
+    this.transport = transport;
   }
 
   /**
@@ -62,8 +68,6 @@ class ThermalPrinterService {
    * Queues and attempts to print a KOT ticket.
    */
   async printKot(job: KotPrintJob): Promise<boolean> {
-    const rawContent = this.formatKotTicket(job);
-
     if (this.status !== 'CONNECTED') {
       console.warn(`🖨️ Printer ${this.status}. Queuing KOT for Order ${job.orderId} in local SQLite buffer.`);
       this.printQueue.push(job);
@@ -71,13 +75,19 @@ class ThermalPrinterService {
       return false;
     }
 
+    return this.attemptPrint(job);
+  }
+
+  private async attemptPrint(job: KotPrintJob): Promise<boolean> {
     try {
+      const rawContent = this.formatKotTicket(job);
+      await this.transport(rawContent);
       console.log('🖨️ [ESC/POS PRINTING KOT]:\n' + rawContent);
       return true;
     } catch (err) {
       console.error('🖨️ Thermal printer hardware error:', err);
       this.status = 'DISCONNECTED';
-      this.printQueue.push(job);
+      this.printQueue.unshift(job);
       this.notify();
       return false;
     }
@@ -98,16 +108,18 @@ class ThermalPrinterService {
 
     while (this.printQueue.length > 0) {
       const job = this.printQueue.shift();
-      if (job) await this.printKot(job);
+      if (!job) continue;
+      const printed = await this.attemptPrint(job);
+      if (!printed) return;
     }
     this.notify();
   }
 
-  togglePrinterStatus() {
+  async togglePrinterStatus() {
     this.status = this.status === 'CONNECTED' ? 'DISCONNECTED' : 'CONNECTED';
     console.log(`🖨️ Printer hardware status toggled to: ${this.status}`);
     if (this.status === 'CONNECTED') {
-      this.flushQueue();
+      await this.flushQueue();
     }
     this.notify();
   }

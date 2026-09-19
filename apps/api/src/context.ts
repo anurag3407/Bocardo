@@ -37,6 +37,10 @@ export async function createContext({
     return { req, res, user: null };
   }
 
+  return { req, res, user: await authenticateToken(token) };
+}
+
+export async function authenticateToken(token: string): Promise<AuthUser | null> {
   try {
     let clerkId = '';
     let email = null;
@@ -45,16 +49,22 @@ export async function createContext({
     let fullName = null;
 
     // Decode Clerk Token (with local development mock fallback)
-    if (token.startsWith('mock_token_')) {
+    if (process.env.NODE_ENV === 'development' && process.env.ALLOW_MOCK_AUTH === 'true' && token.startsWith('mock_token_')) {
       const parts = token.split('_');
       role = (parts[2]?.toUpperCase() as UserRole) || UserRole.CUSTOMER;
       clerkId = `clerk_${role.toLowerCase()}_demo`;
       email = `${role.toLowerCase()}@bocardo.in`;
       fullName = `Demo ${role}`;
     } else {
-      const decoded: any = jwt.decode(token);
+      const publicKey = process.env.CLERK_JWT_KEY?.replace(/\\n/g, '\n');
+      const issuer = process.env.CLERK_ISSUER;
+      const audience = process.env.CLERK_AUDIENCE;
+      if (!publicKey || !issuer || !audience) return null;
+      const decoded = jwt.verify(token, publicKey, {
+        algorithms: ['RS256'], issuer, audience,
+      }) as jwt.JwtPayload;
       if (!decoded || !decoded.sub) {
-        return { req, res, user: null };
+        return null;
       }
       clerkId = decoded.sub;
       email = decoded.email || null;
@@ -63,10 +73,12 @@ export async function createContext({
       role = decoded.publicMetadata?.role || UserRole.CUSTOMER;
     }
 
+    if (!Object.values(UserRole).includes(role)) return null;
+
     // Atomic Just-In-Time (JIT) Upsert: Guarantees user exists in DB before procedure runs
     const userRes = await db.query(
       `INSERT INTO users (clerk_id, email, phone, full_name, role)
-       VALUES ($1, $2, $3, $4)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (clerk_id) DO UPDATE SET updated_at = NOW()
        RETURNING id, clerk_id as "clerkId", email, phone, full_name as "fullName", role, is_suspended as "isSuspended"`,
       [clerkId, email, phone, fullName, role]
@@ -84,16 +96,10 @@ export async function createContext({
       restaurantId = restRes.rows[0]?.id || null;
     }
 
-    return {
-      req,
-      res,
-      user: {
-        ...user,
-        restaurantId,
-      },
-    };
+    if (user.isSuspended) return null;
+    return { ...user, restaurantId };
   } catch (error) {
     console.error('[Context Auth Verification Error]', error);
-    return { req, res, user: null };
+    return null;
   }
 }

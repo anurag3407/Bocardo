@@ -5,6 +5,10 @@ const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 // In-memory fallback map when Redis server is unreachable in development
 const inMemoryCache = new Map<string, { value: string; expiresAt?: number }>();
 
+function requireDevelopmentFallback() {
+  if (process.env.NODE_ENV !== 'development') throw new Error('Redis is unavailable');
+}
+
 let redisClient: Redis | null = null;
 let isRedisConnected = false;
 
@@ -36,6 +40,7 @@ export const redisService = {
         // Fallback to in-memory
       }
     }
+    requireDevelopmentFallback();
     const item = inMemoryCache.get(key);
     if (!item) return null;
     if (item.expiresAt && Date.now() > item.expiresAt) {
@@ -58,6 +63,7 @@ export const redisService = {
         // Fallback to in-memory
       }
     }
+    requireDevelopmentFallback();
     const expiresAt = mode === 'EX' && durationSeconds ? Date.now() + durationSeconds * 1000 : undefined;
     inMemoryCache.set(key, { value, expiresAt });
   },
@@ -71,6 +77,7 @@ export const redisService = {
         // Fallback
       }
     }
+    requireDevelopmentFallback();
     inMemoryCache.delete(key);
   },
 
@@ -87,6 +94,7 @@ export const redisService = {
         // Fallback to memory
       }
     }
+    requireDevelopmentFallback();
     const existing = inMemoryCache.get(lockKey);
     if (existing && (!existing.expiresAt || Date.now() <= existing.expiresAt)) {
       return false; // already locked

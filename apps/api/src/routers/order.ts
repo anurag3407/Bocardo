@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import crypto from 'crypto';
-import { router, protectedProcedure } from '../trpc';
+import { router, protectedProcedure, roleProtectedProcedure } from '../trpc';
 import { db } from '@bocardo/database';
 import {
   CreateOrderInputSchema,
@@ -10,6 +10,7 @@ import {
   calculateOrderTaxBreakdown,
   maskPhoneNumber,
   VerifyDeliveryOtpSchema,
+  canTransitionOrder,
 } from '@bocardo/shared-types';
 import { redisService } from '../services/redis';
 import { paymentService } from '../services/payment';
@@ -26,7 +27,7 @@ export const orderRouter = router({
    * 4. Generates 4-digit cryptographically secure Delivery Handover OTP
    * 5. Creates order in PAYMENT_PENDING & registers with Razorpay
    */
-  create: protectedProcedure
+  create: roleProtectedProcedure(UserRole.CUSTOMER)
     .input(CreateOrderInputSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
@@ -42,8 +43,12 @@ export const orderRouter = router({
       }
 
       try {
+        const restaurant = await db.query('SELECT is_active, is_accepting_orders FROM restaurants WHERE id = $1', [input.restaurantId]);
+        if (!restaurant.rows[0]?.is_active || !restaurant.rows[0]?.is_accepting_orders) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Restaurant is not accepting orders.' });
+        }
         // 2. Fetch live dish prices directly from DB
-        const dishIds = input.items.map((i) => i.dishId);
+        const dishIds = [...new Set(input.items.map((item) => item.dishId))];
         const dishesRes = await db.query(
           `SELECT id, name, price_paise, is_available, restaurant_id 
            FROM dishes 
@@ -91,7 +96,7 @@ export const orderRouter = router({
         const taxBreakdown = calculateOrderTaxBreakdown(subtotalPaise);
 
         // 4. Generate 4-digit Delivery Handover OTP (crypto-secure)
-        const deliveryOtp = crypto.randomInt(1000, 9999).toString();
+        const deliveryOtp = crypto.randomInt(1000, 10000).toString();
 
         // 5. Insert order and items within transaction
         const orderResult = await db.withTransaction(async (client) => {
@@ -214,13 +219,13 @@ export const orderRouter = router({
       if (ctx.user.role === UserRole.RESTAURANT && order.restaurantId !== ctx.user.restaurantId) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this order' });
       }
-      if (ctx.user.role === UserRole.RIDER && order.riderId && order.riderId !== ctx.user.id) {
+      if (ctx.user.role === UserRole.RIDER && order.riderId !== ctx.user.id) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this order' });
       }
 
       // Hide delivery_otp from Rider (customer must provide it verbally at door)
       let otpToReturn = order.deliveryOtp;
-      if (ctx.user.role === UserRole.RIDER) {
+      if (ctx.user.role !== UserRole.CUSTOMER) {
         otpToReturn = '****';
       }
 
@@ -272,6 +277,10 @@ export const orderRouter = router({
       const order = orderRes.rows[0];
 
       // Role check for transition
+      if (!canTransitionOrder(ctx.user.role, order.status, input.status)
+        || (ctx.user.role === UserRole.RIDER && order.rider_id !== ctx.user.id)) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Order transition is not permitted.' });
+      }
       if (
         ctx.user.role === UserRole.RESTAURANT &&
         ctx.user.restaurantId !== order.restaurant_id
@@ -280,10 +289,11 @@ export const orderRouter = router({
       }
 
       // Update status in PostgreSQL
-      await db.query(
-        'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
-        [input.status, input.orderId]
+      const updated = await db.query(
+        'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 AND status = $3 RETURNING id',
+        [input.status, input.orderId, order.status]
       );
+      if (!updated.rowCount) throw new TRPCError({ code: 'CONFLICT', message: 'Order changed; refresh and retry.' });
 
       // Trigger sequential dispatch when food is READY_FOR_PICKUP or PREPARING
       if (input.status === OrderStatus.READY_FOR_PICKUP) {
@@ -303,11 +313,11 @@ export const orderRouter = router({
    * Anti-Fraud Delivery Handover OTP Verification:
    * The rider cannot tap DELIVERED without server verifying customer's 4-digit OTP.
    */
-  verifyDeliveryOtp: protectedProcedure
+  verifyDeliveryOtp: roleProtectedProcedure(UserRole.RIDER)
     .input(VerifyDeliveryOtpSchema)
     .mutation(async ({ ctx, input }) => {
       const orderRes = await db.query(
-        'SELECT id, status, delivery_otp, rider_id FROM orders WHERE id = $1',
+        'SELECT id, status, delivery_otp, rider_id, otp_attempts FROM orders WHERE id = $1',
         [input.orderId]
       );
 
@@ -317,9 +327,23 @@ export const orderRouter = router({
 
       const order = orderRes.rows[0];
 
-      if (ctx.user.role === UserRole.RIDER && order.rider_id !== ctx.user.id) {
+      if (order.rider_id !== ctx.user.id) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not assigned to this order' });
       }
+
+      if (order.status === OrderStatus.DELIVERED) return { success: true, message: 'Delivery already verified.' };
+      if (order.status !== OrderStatus.OUT_FOR_DELIVERY) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Order is not out for delivery.' });
+      const location = await redisService.get(`rider:loc:${ctx.user.id}`);
+      if (!location) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Fresh GPS location required.' });
+      const coordinate = JSON.parse(location);
+      if (Date.now() - coordinate.updatedAt > 30000 || !Number.isFinite(coordinate.accuracy) || coordinate.accuracy > 50) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Accurate, fresh GPS location required.' });
+      }
+      const arrival = await db.query(`SELECT ST_DWithin(delivery_location, ST_SetSRID(ST_MakePoint($2, $3),4326)::geography,100) AS arrived FROM orders WHERE id = $1`,
+        [input.orderId, coordinate.longitude, coordinate.latitude]);
+      if (!arrival.rows[0]?.arrived) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'You must be within 100m of the delivery address.' });
+      const attempt = await db.query(`UPDATE orders SET otp_attempts = otp_attempts + 1 WHERE id = $1 AND otp_attempts < 5 AND status = 'OUT_FOR_DELIVERY' RETURNING id`, [input.orderId]);
+      if (!attempt.rowCount) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'OTP attempts exhausted; contact support.' });
 
       if (order.delivery_otp !== input.otp) {
         throw new TRPCError({
@@ -332,8 +356,8 @@ export const orderRouter = router({
       await db.withTransaction(async (client) => {
         await client.query(
           `UPDATE orders 
-           SET status = $1, updated_at = NOW() 
-           WHERE id = $2`,
+           SET status = $1, updated_at = NOW(), delivered_at = NOW()
+           WHERE id = $2 AND status = 'OUT_FOR_DELIVERY'`,
           [OrderStatus.DELIVERED, input.orderId]
         );
 
@@ -341,8 +365,8 @@ export const orderRouter = router({
           await client.query(
             `UPDATE rider_profiles 
              SET active_order_id = NULL 
-             WHERE user_id = $1`,
-            [order.rider_id]
+             WHERE user_id = $1 AND active_order_id = $2`,
+            [order.rider_id, input.orderId]
           );
         }
       });

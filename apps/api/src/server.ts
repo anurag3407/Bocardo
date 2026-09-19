@@ -6,6 +6,8 @@ import { appRouter } from './routers/_app';
 import { createContext } from './context';
 import { socketService } from './services/socket';
 import { paymentService } from './services/payment';
+import { registerRazorpayRoute } from './services/razorpayRoute';
+import { startOutboxWorker } from './workers/outboxWorker';
 
 dotenv.config();
 
@@ -19,7 +21,7 @@ const server: FastifyInstance = fastify({
 async function main() {
   // 1. CORS
   await server.register(cors, {
-    origin: true,
+    origin: (process.env.ALLOWED_ORIGINS || 'http://localhost:3001').split(','),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
@@ -34,29 +36,7 @@ async function main() {
   });
 
   // 3. Webhook: Razorpay Payment Captured & Refunds
-  server.post('/webhooks/razorpay', async (req, reply) => {
-    const signature = req.headers['x-razorpay-signature'] as string;
-    const bodyStr = JSON.stringify(req.body);
-
-    const isValid = paymentService.verifyWebhookSignature(bodyStr, signature || '');
-    if (!isValid) {
-      server.log.warn('[Razorpay Webhook] Invalid signature rejected');
-      return reply.status(400).send({ error: 'Invalid webhook signature' });
-    }
-
-    const event = req.body as any;
-    if (event.event === 'payment.captured') {
-      const payment = event.payload.payment.entity;
-      await paymentService.processPaymentCapturedWebhook(
-        event.id || `evt_${payment.id}`,
-        payment.order_id,
-        payment.id,
-        event
-      );
-    }
-
-    return reply.status(200).send({ status: 'ok' });
-  });
+  await registerRazorpayRoute(server, paymentService);
 
   // 4. Register tRPC Fastify Plugin
   await server.register(fastifyTRPCPlugin, {
@@ -72,6 +52,8 @@ async function main() {
 
   // 5. Initialize Socket.io Server on underlying HTTP server
   socketService.initialize(server.server);
+  const stopOutbox = startOutboxWorker();
+  server.addHook('onClose', async () => stopOutbox());
 
   // 6. Start listening
   try {

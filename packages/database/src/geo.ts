@@ -58,6 +58,8 @@ export async function findNearestOnlineRider(
     WHERE u.role = 'RIDER' 
       AND rp.is_online = TRUE 
       AND rp.active_order_id IS NULL
+      AND u.is_suspended = FALSE
+      AND rp.updated_at > NOW() - INTERVAL '60 seconds'
       AND NOT (u.id = ANY($3::uuid[]))
       AND ST_DWithin(rp.last_location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
     ORDER BY "distanceMeters" ASC

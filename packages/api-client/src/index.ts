@@ -11,8 +11,8 @@ export interface CreateApiClientOptions {
 /**
  * Creates a strongly typed tRPC client instance for Expo Mobile & Web applications.
  */
-export function createApiClient<TRouter = AppRouter>(options: CreateApiClientOptions) {
-  const client = createTRPCProxyClient<any>({
+export function createApiClient(options: CreateApiClientOptions): ReturnType<typeof createTRPCProxyClient<AppRouter>> {
+  const client = createTRPCProxyClient<AppRouter>({
     links: [
       httpBatchLink({
         url: `${options.baseUrl}/trpc`,
@@ -26,5 +26,5 @@ export function createApiClient<TRouter = AppRouter>(options: CreateApiClientOpt
     ],
   });
 
-  return client as unknown as ReturnType<typeof createTRPCProxyClient<any>>;
+  return client;
 }

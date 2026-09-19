@@ -26,7 +26,7 @@ export const db = {
       }
       return res;
     } catch (error) {
-      console.error('[DB Query Error]', { text, params, error });
+      console.error('[DB Query Error]', { error: error instanceof Error ? error.name : 'UnknownError' });
       throw error;
     }
   },

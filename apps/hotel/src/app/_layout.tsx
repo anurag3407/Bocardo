@@ -41,7 +41,7 @@ export default function HotelLayout() {
               styles.printerBadge,
               printerStatus === 'CONNECTED' ? styles.printerOk : styles.printerWarn,
             ]}
-            onPress={() => thermalPrinterService.togglePrinterStatus()}
+            onPress={() => { void thermalPrinterService.togglePrinterStatus(); }}
           >
             <Text style={styles.printerText}>
               {printerStatus === 'CONNECTED'

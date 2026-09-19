@@ -13,8 +13,8 @@ export const GpsCoordinateSchema = z.object({
   longitude: z.number().min(-180).max(180),
   heading: z.number().min(0).max(360).optional(),
   speed: z.number().min(0).max(120).optional(), // max 120 km/h / realistic threshold
-  accuracy: z.number().optional(),
-  timestamp: z.number().optional(),
+  accuracy: z.number().finite().nonnegative().optional(),
+  timestamp: z.number().int().positive().optional(),
   isMocked: z.boolean().default(false),
 }).refine((data) => !data.isMocked, {
   message: 'Mock GPS detected. Spoofed coordinates are rejected.',

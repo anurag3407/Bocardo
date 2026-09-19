@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import { verifyWebhookSignature } from './webhookSignature';
 import Razorpay from 'razorpay';
 import { db } from '@bocardo/database';
 import { OrderStatus } from '@bocardo/shared-types';
@@ -6,7 +6,7 @@ import { socketService } from './socket';
 
 const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_mock_key_id';
 const keySecret = process.env.RAZORPAY_KEY_SECRET || 'mock_razorpay_secret';
-const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'mock_webhook_secret';
+const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 const razorpay = new Razorpay({
   key_id: keyId,
@@ -19,7 +19,7 @@ export const paymentService = {
    */
   createOrder: async (orderId: string, amountPaise: number) => {
     try {
-      if (keyId.startsWith('rzp_test_mock')) {
+      if (keyId.startsWith('rzp_test_mock') && process.env.NODE_ENV === 'development' && process.env.ALLOW_MOCK_PAYMENTS === 'true') {
         // Safe mock return for local development without live API keys
         return {
           id: `order_mock_${orderId.replace(/-/g, '').slice(0, 14)}`,
@@ -33,7 +33,7 @@ export const paymentService = {
       const response = await razorpay.orders.create({
         amount: amountPaise,
         currency: 'INR',
-        receipt: `order_${orderId}`,
+        receipt: orderId,
       });
       return response;
     } catch (error) {
@@ -46,12 +46,7 @@ export const paymentService = {
    * Verifies Razorpay Webhook HMAC SHA-256 Signature.
    */
   verifyWebhookSignature: (rawBody: string, signature: string): boolean => {
-    if (keyId.startsWith('rzp_test_mock')) return true; // Dev bypass
-    const expected = crypto
-      .createHmac('sha256', webhookSecret)
-      .update(rawBody)
-      .digest('hex');
-    return expected === signature;
+    return verifyWebhookSignature(rawBody, signature, webhookSecret);
   },
 
   /**
@@ -70,10 +65,11 @@ export const paymentService = {
     return await db.withTransaction(async (client) => {
       // 1. Check idempotency
       const existing = await client.query(
-        'SELECT event_id FROM processed_webhooks WHERE event_id = $1',
-        [eventId]
+        `INSERT INTO processed_webhooks (event_id, event_type, payload)
+         VALUES ($1, 'payment.captured', $2) ON CONFLICT DO NOTHING RETURNING event_id`,
+        [eventId, JSON.stringify(payload)]
       );
-      if (existing.rowCount && existing.rowCount > 0) {
+      if (!existing.rowCount) {
         return { success: true, alreadyProcessed: true };
       }
 
@@ -85,10 +81,14 @@ export const paymentService = {
 
       if (!orderRes.rowCount || orderRes.rowCount === 0) {
         console.warn(`[Payment Webhook] Order not found for razorpay_order_id: ${razorpayOrderId}`);
-        return { success: false, alreadyProcessed: false };
+        throw new Error('Payment order is not available for reconciliation');
       }
 
       const order = orderRes.rows[0];
+      const payment = payload.payload?.payment?.entity;
+      if (payment?.amount !== Number(order.total_amount_paise) || payment?.currency !== 'INR' || payment?.status !== 'captured') {
+        throw new Error('Captured payment does not match the order');
+      }
 
       if (order.status === OrderStatus.PAYMENT_PENDING) {
         await client.query(
@@ -99,20 +99,10 @@ export const paymentService = {
         );
       }
 
-      // 3. Mark webhook as processed
-      await client.query(
-        `INSERT INTO processed_webhooks (event_id, event_type, payload) 
-         VALUES ($1, 'payment.captured', $2)`,
-        [eventId, JSON.stringify(payload)]
-      );
-
-      // 4. Notify Restaurant via Socket.io
-      socketService.emitToRestaurant(order.restaurant_id, 'restaurant:new_order', {
-        orderId: order.id,
-        restaurantId: order.restaurant_id,
-        totalAmountPaise: order.total_amount_paise,
-        createdAt: new Date().toISOString(),
-      });
+      if (order.status === OrderStatus.PAYMENT_PENDING) {
+        await client.query(`INSERT INTO realtime_outbox (room, event, payload) VALUES ($1, $2, $3)`,
+          [`restaurant:${order.restaurant_id}`, 'restaurant:new_order', JSON.stringify({ orderId: order.id, restaurantId: order.restaurant_id, totalAmountPaise: Number(order.total_amount_paise) })]);
+      }
 
       return { success: true, alreadyProcessed: false };
     });
@@ -128,7 +118,8 @@ export const paymentService = {
     notes: Record<string, string>
   ) => {
     try {
-      if (keyId.startsWith('rzp_test_mock') || !paymentId) {
+      if (!paymentId) throw new Error('A captured payment is required for refund');
+      if (keyId.startsWith('rzp_test_mock') && process.env.NODE_ENV === 'development' && process.env.ALLOW_MOCK_PAYMENTS === 'true') {
         return {
           id: `rfnd_mock_${Date.now()}`,
           payment_id: paymentId || 'mock_pay_id',
