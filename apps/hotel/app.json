@@ -24,6 +24,17 @@
       "bundler": "metro",
       "output": "static"
     },
-    "plugins": ["expo-router"]
+    "plugins": [
+      "expo-router"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "23a734cd-4ab2-4317-bbc4-d73475b956b0"
+      }
+    },
+    "owner": "anurag3407"
   }
 }

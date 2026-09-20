@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@babel/runtime": "^8.0.5",
     "@bocardo/api-client": "workspace:*",
     "@bocardo/shared-types": "workspace:*",
     "@bocardo/ui": "workspace:*",
@@ -33,6 +34,7 @@
   "devDependencies": {
     "@babel/core": "^7.20.0",
     "@bocardo/typescript-config": "workspace:*",
+    "@react-native/gradle-plugin": "^0.74.87",
     "@types/react": "~18.2.45",
     "typescript": "^5.5.4"
   }

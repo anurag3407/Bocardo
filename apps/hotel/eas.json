@@ -5,9 +5,9 @@
       "distribution": "internal",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.bocardo.in",
-        "EXPO_PUBLIC_SOCKET_URL": "https://api.bocardo.in",
-        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_xxx"
+        "EXPO_PUBLIC_API_URL": "http://52.66.138.38",
+        "EXPO_PUBLIC_SOCKET_URL": "http://52.66.138.38",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_test_mock"
       }
     },
     "production": {

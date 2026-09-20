@@ -14,7 +14,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "in.bocardo.rider",
       "infoPlist": {
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -33,6 +36,17 @@
       "bundler": "metro",
       "output": "static"
     },
-    "plugins": ["expo-router"]
+    "plugins": [
+      "expo-router"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "1dae70fe-ded8-48a4-9f33-b642b4a19d2d"
+      }
+    },
+    "owner": "anurag3407"
   }
 }

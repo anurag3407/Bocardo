@@ -142,6 +142,9 @@ importers:
 
   apps/customer:
     dependencies:
+      '@babel/runtime':
+        specifier: ^8.0.5
+        version: 8.0.5
       '@bocardo/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
@@ -200,6 +203,9 @@ importers:
       '@bocardo/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
+      '@react-native/gradle-plugin':
+        specifier: ^0.74.87
+        version: 0.74.87
       '@types/react':
         specifier: ~18.2.45
         version: 18.2.79
@@ -209,6 +215,9 @@ importers:
 
   apps/hotel:
     dependencies:
+      '@babel/runtime':
+        specifier: ^8.0.5
+        version: 8.0.5
       '@bocardo/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
@@ -267,6 +276,9 @@ importers:
       '@bocardo/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
+      '@react-native/gradle-plugin':
+        specifier: ^0.74.87
+        version: 0.74.87
       '@types/react':
         specifier: ~18.2.45
         version: 18.2.79
@@ -276,6 +288,9 @@ importers:
 
   apps/rider:
     dependencies:
+      '@babel/runtime':
+        specifier: ^8.0.5
+        version: 8.0.5
       '@bocardo/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
@@ -337,6 +352,9 @@ importers:
       '@bocardo/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
+      '@react-native/gradle-plugin':
+        specifier: ^0.74.87
+        version: 0.74.87
       '@types/react':
         specifier: ~18.2.45
         version: 18.2.79
@@ -1169,6 +1187,9 @@ packages:
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
+
+  '@babel/runtime@8.0.5':
+    resolution: {integrity: sha512-7NK+Lz3spQ52XsUGTxIEVU4jYN2/dIaX8sTxRFAUtYmttYZnVh3aehiihv+/Gb7+duMNHl2OrFcBQRyOHScxpg==}
 
   '@babel/template@7.29.7':
     resolution: {integrity: sha512-puq+Gf35oI24FeN11LkoUQFqv9uwNeWpxXZi/Ji3rRIoKAzKnxRaZ+Gkj0vKS9ZCiTESfng1N9LyOyXvo+m+Gg==}
@@ -7107,6 +7128,8 @@ snapshots:
       source-map-support: 0.5.21
 
   '@babel/runtime@7.29.7': {}
+
+  '@babel/runtime@8.0.5': {}
 
   '@babel/template@7.29.7':
     dependencies:
