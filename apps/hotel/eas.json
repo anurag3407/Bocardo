@@ -1,0 +1,22 @@
+{
+  "cli": { "version": ">= 12.0.0", "appVersionSource": "remote" },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.bocardo.in",
+        "EXPO_PUBLIC_SOCKET_URL": "https://api.bocardo.in",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_xxx"
+      }
+    },
+    "production": {
+      "android": { "buildType": "app-bundle" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.bocardo.in",
+        "EXPO_PUBLIC_SOCKET_URL": "https://api.bocardo.in",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_xxx"
+      }
+    }
+  }
+}

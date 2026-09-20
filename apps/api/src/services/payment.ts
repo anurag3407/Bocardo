@@ -109,6 +109,59 @@ export const paymentService = {
   },
 
   /**
+   * Handles Razorpay `payment.failed` webhook:
+   * cancels PAYMENT_PENDING orders whose checkout attempt failed so they
+   * never reach the kitchen or get swept as ambiguous state.
+   */
+  processPaymentFailedWebhook: async (
+    eventId: string,
+    razorpayOrderId: string,
+    payload: any
+  ): Promise<{ success: boolean; alreadyProcessed: boolean }> => {
+    return await db.withTransaction(async (client) => {
+      const existing = await client.query(
+        `INSERT INTO processed_webhooks (event_id, event_type, payload)
+         VALUES ($1, 'payment.failed', $2) ON CONFLICT DO NOTHING RETURNING event_id`,
+        [eventId, JSON.stringify(payload)]
+      );
+      if (!existing.rowCount) {
+        return { success: true, alreadyProcessed: true };
+      }
+
+      const updated = await client.query(
+        `UPDATE orders
+         SET status = $1, cancel_reason = $2, updated_at = NOW()
+         WHERE razorpay_order_id = $3 AND status = $4
+         RETURNING id`,
+        [
+          OrderStatus.CANCELLED_BY_SYSTEM,
+          'Payment failed at checkout',
+          razorpayOrderId,
+          OrderStatus.PAYMENT_PENDING,
+        ]
+      );
+
+      if (updated.rowCount) {
+        const orderId = updated.rows[0].id;
+        await client.query(
+          `INSERT INTO realtime_outbox (room, event, payload) VALUES ($1, $2, $3)`,
+          [
+            `order_tracking:${orderId}`,
+            'order:status:update',
+            JSON.stringify({
+              orderId,
+              status: OrderStatus.CANCELLED_BY_SYSTEM,
+              message: 'Payment failed. No amount was charged.',
+            }),
+          ]
+        );
+      }
+
+      return { success: true, alreadyProcessed: false };
+    });
+  },
+
+  /**
    * Invokes Razorpay Instant Refund API.
    * Used for Ghost Restaurant 120s timeout auto-cancellation.
    */
@@ -132,6 +185,25 @@ export const paymentService = {
         amount: amountPaise,
         notes,
       });
+
+      // Immutable refund audit trail (best-effort; refund itself already succeeded)
+      try {
+        await db.query(
+          `INSERT INTO refund_events (order_id, razorpay_payment_id, razorpay_refund_id, amount_paise, reason, initiated_by)
+           SELECT o.id, $1, $2, $3, $4, $5 FROM orders o WHERE o.razorpay_payment_id = $1
+           ON CONFLICT DO NOTHING`,
+          [
+            paymentId,
+            refund?.id || null,
+            amountPaise,
+            notes?.reason || 'unspecified',
+            notes?.cancelled_by || (notes?.reason?.includes('non-responsive') ? 'SYSTEM' : 'SYSTEM'),
+          ]
+        );
+      } catch (auditErr) {
+        console.error('[Refund Audit Log Error]', auditErr);
+      }
+
       return refund;
     } catch (error) {
       console.error('[Razorpay Refund Error]', error);

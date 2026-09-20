@@ -10,6 +10,8 @@ interface SettlementRecord {
   endDate: string;
   grossAmountPaise: number;
   commissionDeductedPaise: number;
+  commissionGstPaise?: number;
+  tdsPaise?: number;
   netPayoutPaise: number;
   status: SettlementStatus;
   bankUtrReference?: string;
@@ -25,6 +27,8 @@ const INITIAL_SETTLEMENTS: SettlementRecord[] = [
     endDate: '2026-09-17',
     grossAmountPaise: 4200000, // ₹42,000.00
     commissionDeductedPaise: 630000, // 15% = ₹6,300.00
+    commissionGstPaise: 113400, // 18% GST on commission = ₹1,134.00
+    tdsPaise: 42000, // 1% TDS Sec 194-O = ₹420.00
     netPayoutPaise: 3570000, // ₹35,700.00
     status: SettlementStatus.PENDING,
     accountNumber: '50200098128412',
@@ -37,6 +41,8 @@ const INITIAL_SETTLEMENTS: SettlementRecord[] = [
     endDate: '2026-09-17',
     grossAmountPaise: 2800000, // ₹28,000.00
     commissionDeductedPaise: 350000, // 12.5% = ₹3,500.00
+    commissionGstPaise: 63000, // 18% GST on commission = ₹630.00
+    tdsPaise: 28000, // 1% TDS Sec 194-O = ₹280.00
     netPayoutPaise: 2450000, // ₹24,500.00
     status: SettlementStatus.PAID,
     bankUtrReference: 'HDFCN2628192019',
@@ -111,7 +117,9 @@ export default function AdminSettlementsPage() {
               <th className="px-6 py-4">Partner</th>
               <th className="px-6 py-4">Cycle</th>
               <th className="px-6 py-4">Gross Sales</th>
-              <th className="px-6 py-4">Commission (15%)</th>
+              <th className="px-6 py-4">Commission</th>
+              <th className="px-6 py-4">Comm. GST (18%)</th>
+              <th className="px-6 py-4">TDS (1%)</th>
               <th className="px-6 py-4">Net Payout</th>
               <th className="px-6 py-4">Status & UTR</th>
               <th className="px-6 py-4">Action</th>
@@ -134,6 +142,12 @@ export default function AdminSettlementsPage() {
                 </td>
                 <td className="px-6 py-4 font-semibold text-rose-600">
                   -{formatPaiseToRupees(s.commissionDeductedPaise)}
+                </td>
+                <td className="px-6 py-4 font-semibold text-amber-600">
+                  -{formatPaiseToRupees(s.commissionGstPaise || Math.round(s.commissionDeductedPaise * 0.18))}
+                </td>
+                <td className="px-6 py-4 font-semibold text-slate-600">
+                  -{formatPaiseToRupees(s.tdsPaise || Math.round(s.grossAmountPaise * 0.01))}
                 </td>
                 <td className="px-6 py-4 font-black text-slate-900 text-base">
                   {formatPaiseToRupees(s.netPayoutPaise)}

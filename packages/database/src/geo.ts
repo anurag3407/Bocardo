@@ -34,6 +34,7 @@ export interface TrendingDishResult {
   restaurantName: string;
   category: string;
   distanceMeters: number;
+  orderVelocity?: number;
 }
 
 /**
@@ -59,7 +60,7 @@ export async function findNearestOnlineRider(
       AND rp.is_online = TRUE 
       AND rp.active_order_id IS NULL
       AND u.is_suspended = FALSE
-      AND rp.updated_at > NOW() - INTERVAL '60 seconds'
+      AND rp.updated_at > NOW() - INTERVAL '300 seconds'
       AND NOT (u.id = ANY($3::uuid[]))
       AND ST_DWithin(rp.last_location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
     ORDER BY "distanceMeters" ASC
@@ -118,7 +119,8 @@ export async function findRestaurantsWithinRadius(
 
 /**
  * Hyperlocal Trending Dishes Near Customer:
- * Finds popular dishes in restaurants within 5km, optionally filtered by current meal slot.
+ * Discovers velocity-ranked popular dishes from active restaurants within radius (default 5km),
+ * optionally filtered by active meal slot, with restaurant diversity windowing (max 2 dishes per restaurant).
  */
 export async function findTrendingDishesNearLocation(
   latitude: number,
@@ -138,24 +140,53 @@ export async function findTrendingDishesNearLocation(
   const limitParamIndex = params.length;
 
   const sql = `
-    SELECT d.id,
-           d.name,
-           d.description,
-           d.price_paise as "pricePaise",
-           d.image_url as "imageUrl",
-           d.is_veg as "isVeg",
-           d.restaurant_id as "restaurantId",
-           r.name as "restaurantName",
-           d.category,
-           ST_Distance(r.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS "distanceMeters"
-    FROM dishes d
-    JOIN restaurants r ON d.restaurant_id = r.id
-    WHERE d.is_available = TRUE
-      AND r.is_active = TRUE
-      AND r.is_accepting_orders = TRUE
-      AND ST_DWithin(r.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
-      ${slotFilter}
-    ORDER BY "distanceMeters" ASC
+    WITH dish_popularity AS (
+      SELECT d.id,
+             d.name,
+             d.description,
+             d.price_paise as "pricePaise",
+             d.image_url as "imageUrl",
+             d.is_veg as "isVeg",
+             d.restaurant_id as "restaurantId",
+             r.name as "restaurantName",
+             d.category,
+             r.rating::float as rating,
+             ST_Distance(r.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS "distanceMeters",
+             COALESCE(sales.velocity, 0) as "orderVelocity",
+             ROW_NUMBER() OVER (
+               PARTITION BY d.restaurant_id 
+               ORDER BY COALESCE(sales.velocity, 0) DESC, d.price_paise DESC
+             ) as rest_dish_rank
+      FROM dishes d
+      JOIN restaurants r ON d.restaurant_id = r.id
+      LEFT JOIN (
+        SELECT oi.dish_id, COUNT(oi.id) as velocity
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.id
+        WHERE o.created_at >= NOW() - INTERVAL '7 days'
+          AND o.status NOT IN ('CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_KITCHEN', 'CANCELLED_BY_SYSTEM', 'PAYMENT_PENDING')
+        GROUP BY oi.dish_id
+      ) sales ON sales.dish_id = d.id
+      WHERE d.is_available = TRUE
+        AND r.is_active = TRUE
+        AND r.is_accepting_orders = TRUE
+        AND ST_DWithin(r.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+        ${slotFilter}
+    )
+    SELECT id,
+           name,
+           description,
+           "pricePaise",
+           "imageUrl",
+           "isVeg",
+           "restaurantId",
+           "restaurantName",
+           category,
+           "distanceMeters",
+           "orderVelocity"
+    FROM dish_popularity
+    WHERE rest_dish_rank <= 2
+    ORDER BY "orderVelocity" DESC, rating DESC, "distanceMeters" ASC
     LIMIT $${limitParamIndex};
   `;
 

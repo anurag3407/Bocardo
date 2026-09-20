@@ -1,11 +1,13 @@
 import { z } from 'zod';
-import { UserRole, OrderStatus, MealSlot, SettlementStatus, EntityType } from './enums';
+import { UserRole, OrderStatus, MealSlot, SettlementStatus, EntityType, FoodType } from './enums';
+import { MenuCustomizationSchema } from './menu';
 
 export const UserRoleSchema = z.nativeEnum(UserRole);
 export const OrderStatusSchema = z.nativeEnum(OrderStatus);
 export const MealSlotSchema = z.nativeEnum(MealSlot);
 export const SettlementStatusSchema = z.nativeEnum(SettlementStatus);
 export const EntityTypeSchema = z.nativeEnum(EntityType);
+export const FoodTypeSchema = z.nativeEnum(FoodType);
 
 // GPS Coordinate Schema with Anti-Cheat Mock GPS Detection
 export const GpsCoordinateSchema = z.object({
@@ -69,10 +71,13 @@ export const DishSchema = z.object({
   pricePaise: z.number().int().positive(), // stored in paise e.g. ₹100 = 10000
   imageUrl: z.string().url().nullable().optional(),
   isVeg: z.boolean().default(true),
+  foodType: FoodTypeSchema.default(FoodType.VEG),
   isAvailable: z.boolean().default(true),
   mealSlots: z.array(MealSlotSchema).default([MealSlot.LUNCH, MealSlot.DINNER]),
   preparationTimeMinutes: z.number().int().default(20),
   category: z.string().default('Main Course'),
+  variants: z.array(z.any()).optional(),
+  addOnGroups: z.array(z.any()).optional(),
   createdAt: z.string().or(z.date()),
 });
 
@@ -86,6 +91,8 @@ export const OrderItemSchema = z.object({
   quantity: z.number().int().positive(),
   unitPricePaise: z.number().int().positive(),
   totalPricePaise: z.number().int().positive(),
+  customization: z.string().nullable().optional(),
+  addOnSummary: z.array(z.string()).optional(),
 });
 
 export type OrderItem = z.infer<typeof OrderItemSchema>;
@@ -97,12 +104,14 @@ export const CreateOrderInputSchema = z.object({
     z.object({
       dishId: z.string().uuid(),
       quantity: z.number().int().positive().max(50),
+      customization: MenuCustomizationSchema.optional(),
     })
   ).min(1, 'Cart cannot be empty'),
   deliveryLatitude: z.number().min(-90).max(90),
   deliveryLongitude: z.number().min(-180).max(180),
   deliveryAddress: z.string().min(5),
   specialInstructions: z.string().max(250).optional(),
+  tipPaise: z.number().int().min(0).max(100000).optional(),
 });
 
 export type CreateOrderInput = z.infer<typeof CreateOrderInputSchema>;
@@ -125,6 +134,8 @@ export const OrderSchema = z.object({
   deliveryFeePaise: z.number().int(),
   platformFeePaise: z.number().int(),
   serviceGstPaise: z.number().int(),
+  packagingFeePaise: z.number().int().default(0),
+  tipPaise: z.number().int().default(0),
   totalAmountPaise: z.number().int(),
   
   razorpayOrderId: z.string().nullable().optional(),
@@ -144,6 +155,9 @@ export type Order = z.infer<typeof OrderSchema>;
 export const VerifyDeliveryOtpSchema = z.object({
   orderId: z.string().uuid(),
   otp: z.string().regex(/^\d{4}$/, 'OTP must be exactly 4 digits'),
+  isGateHandover: z.boolean().optional(),
+  emergencyOverride: z.boolean().optional(),
+  emergencyReason: z.string().max(250).optional(),
 });
 
 export type VerifyDeliveryOtp = z.infer<typeof VerifyDeliveryOtpSchema>;
@@ -158,6 +172,10 @@ export const SettlementSchema = z.object({
   endDate: z.string(),
   grossAmountPaise: z.number().int(),
   commissionDeductedPaise: z.number().int(),
+  commissionGstPaise: z.number().int().optional(),
+  tdsDeductedPaise: z.number().int().optional(),
+  tcsDeductedPaise: z.number().int().optional(),
+  packagingFeePaise: z.number().int().optional(),
   netPayoutPaise: z.number().int(),
   status: SettlementStatusSchema,
   bankUtrReference: z.string().nullable().optional(),

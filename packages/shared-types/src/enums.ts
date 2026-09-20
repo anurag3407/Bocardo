@@ -36,3 +36,18 @@ export enum EntityType {
   RESTAURANT = 'RESTAURANT',
   RIDER = 'RIDER',
 }
+
+/**
+ * Diet classification for Indian food platforms.
+ * VEG = green dot, NON_VEG = brown/red triangle, EGG = amber egg badge.
+ */
+export enum FoodType {
+  VEG = 'VEG',
+  NON_VEG = 'NON_VEG',
+  EGG = 'EGG',
+}
+
+export enum DiscountType {
+  PERCENTAGE = 'PERCENTAGE',
+  FLAT = 'FLAT',
+}

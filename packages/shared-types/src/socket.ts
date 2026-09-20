@@ -25,11 +25,30 @@ export interface DispatchOfferPayload {
   restaurantId: string;
   restaurantName: string;
   restaurantAddress: string;
+  restaurantLatitude?: number;
+  restaurantLongitude?: number;
   deliveryAddress: string;
+  deliveryLatitude?: number;
+  deliveryLongitude?: number;
   distanceKm: number;
   payoutPaise: number;
   expiresInSeconds: number; // 30 seconds ticking timer
   expiresAt: number;
+}
+
+export interface PrepTimeUpdatePayload {
+  orderId: string;
+  addedMinutes: number;
+  prepTimeMinutes: number;
+  estimatedReadyAt: string;
+}
+
+export interface RestaurantItem86Payload {
+  restaurantId: string;
+  dishId: string;
+  dishName: string;
+  isAvailable: boolean;
+  resetAt: string | null;
 }
 
 export interface DispatchResponsePayload {
@@ -56,4 +75,7 @@ export const SOCKET_EVENTS = {
   DISPATCH_RESPONSE: 'dispatch:response',
   RESTAURANT_NEW_ORDER: 'restaurant:new_order',
   ORDER_STATUS_UPDATE: 'order:status:update',
+  PREP_TIME_UPDATE: 'order:prep_time:update',
+  ITEM_86_UPDATE: 'restaurant:item_86',
+  DISPATCH_CASCADE: 'dispatch:cascade',
 } as const;

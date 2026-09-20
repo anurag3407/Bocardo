@@ -6,34 +6,107 @@ import {
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { OrderStatus } from '@bocardo/shared-types';
+import io from 'socket.io-client';
+import { trpc, API_URL } from '../../lib/api';
 
 export default function OrderTrackingScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const [status, setStatus] = useState<OrderStatus>(OrderStatus.PREPARING);
-  const [deliveryOtp] = useState('4819'); // Server-generated 4-digit handover OTP
+  const [deliveryOtp, setDeliveryOtp] = useState('----');
   const [riderLocation, setRiderLocation] = useState({ lat: 12.9725, lng: 77.6415 });
+  const [orderMeta, setOrderMeta] = useState<{ restaurantName?: string; deliveryAddress?: string } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Simulate real-time GPS pulses along the delivery route
+  // 1. Fetch live order data from backend API
   useEffect(() => {
-    const timer = setInterval(() => {
-      setRiderLocation((prev) => ({
-        lat: prev.lat + 0.0002 * (Math.random() - 0.4),
-        lng: prev.lng + 0.0002 * (Math.random() - 0.4),
-      }));
-    }, 3000);
-    return () => clearInterval(timer);
-  }, []);
+    let isMounted = true;
+    const orderId = String(id);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+
+    if (isUuid) {
+      trpc.order.getById
+        .query({ orderId })
+        .then((order: any) => {
+          if (!isMounted) return;
+          setStatus(order.status as OrderStatus);
+          setDeliveryOtp(order.deliveryOtp || '----');
+          setOrderMeta({
+            restaurantName: order.restaurantName,
+            deliveryAddress: order.deliveryAddress,
+          });
+          setIsLoading(false);
+        })
+        .catch(() => {
+          if (!isMounted) return;
+          // Fallback gracefully for local dev simulation
+          setDeliveryOtp('4819');
+          setIsLoading(false);
+        });
+    } else {
+      setDeliveryOtp('4819');
+      setIsLoading(false);
+    }
+
+    // 2. Connect to real Socket.io tracking room
+    let socket: any = null;
+    try {
+      socket = io(API_URL, {
+        auth: { token: 'mock_token_customer_user' },
+        transports: ['websocket', 'polling'],
+      });
+
+      socket.on('connect', () => {
+        if (isUuid) {
+          socket.emit('join:room', `order_tracking:${orderId}`);
+        }
+      });
+
+      socket.on('order:status:update', (data: { orderId: string; status: OrderStatus }) => {
+        if (data.orderId === orderId && data.status) {
+          setStatus(data.status);
+        }
+      });
+
+      socket.on('order_tracking', (data: { orderId: string; riderLocation: { latitude: number; longitude: number } }) => {
+        if (data.orderId === orderId && data.riderLocation) {
+          setRiderLocation({
+            lat: data.riderLocation.latitude,
+            lng: data.riderLocation.longitude,
+          });
+        }
+      });
+    } catch {
+      // safe fallback
+    }
+
+    return () => {
+      isMounted = false;
+      if (socket) {
+        socket.disconnect();
+      }
+    };
+  }, [id]);
+
+  const stageOrder = [
+    OrderStatus.PAID,
+    OrderStatus.ACCEPTED_BY_KITCHEN,
+    OrderStatus.PREPARING,
+    OrderStatus.OUT_FOR_DELIVERY,
+    OrderStatus.DELIVERED,
+  ];
+  const currentIndex = stageOrder.indexOf(status);
 
   const steps = [
-    { key: OrderStatus.PAID, label: 'Order Confirmed', done: true },
-    { key: OrderStatus.ACCEPTED_BY_KITCHEN, label: 'Kitchen Accepted', done: true },
-    { key: OrderStatus.PREPARING, label: 'Preparing Fresh Food', done: true },
-    { key: OrderStatus.OUT_FOR_DELIVERY, label: 'Rider Out for Delivery', done: false },
-    { key: OrderStatus.DELIVERED, label: 'Delivered', done: false },
+    { key: OrderStatus.PAID, label: 'Order Confirmed', done: currentIndex >= 0 },
+    { key: OrderStatus.ACCEPTED_BY_KITCHEN, label: 'Kitchen Accepted', done: currentIndex >= 1 },
+    { key: OrderStatus.PREPARING, label: 'Preparing Fresh Food', done: currentIndex >= 2 },
+    { key: OrderStatus.OUT_FOR_DELIVERY, label: 'Rider Out for Delivery', done: currentIndex >= 3 },
+    { key: OrderStatus.DELIVERED, label: 'Delivered', done: currentIndex >= 4 },
   ];
 
   return (
@@ -222,7 +295,7 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
     opacity: 0.4,
     position: 'absolute',
     bottom: -6,
@@ -282,7 +355,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#FFF2E8',
+    backgroundColor: '#F0FDFA',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,

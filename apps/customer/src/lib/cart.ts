@@ -1,6 +1,12 @@
-import { calculateOrderTaxBreakdown, OrderTaxBreakdown } from '@bocardo/shared-types';
+import {
+  calculateOrderTaxBreakdown,
+  OrderTaxBreakdown,
+  MenuCustomization,
+  buildCartLineId,
+} from '@bocardo/shared-types';
 
 export interface CartItem {
+  lineId: string;
   dishId: string;
   name: string;
   pricePaise: number;
@@ -8,7 +14,16 @@ export interface CartItem {
   isVeg: boolean;
   restaurantId: string;
   restaurantName: string;
+  variantId?: string | null;
+  variantName?: string | null;
+  addOnSummary?: string[];
+  customization?: MenuCustomization;
 }
+
+export type CartItemInput = Omit<CartItem, 'quantity' | 'lineId'> & {
+  quantity?: number;
+  lineId?: string;
+};
 
 type CartListener = () => void;
 
@@ -41,32 +56,50 @@ class CartStore {
     return this.restaurantName;
   }
 
-  addItem(item: Omit<CartItem, 'quantity'>) {
-    if (this.restaurantId && this.restaurantId !== item.restaurantId) {
+  addItem(input: CartItemInput) {
+    if (this.restaurantId && this.restaurantId !== input.restaurantId) {
       // Discard previous cart if from a different restaurant
       this.items = [];
     }
 
-    this.restaurantId = item.restaurantId;
-    this.restaurantName = item.restaurantName;
+    this.restaurantId = input.restaurantId;
+    this.restaurantName = input.restaurantName;
 
-    const existing = this.items.find((i) => i.dishId === item.dishId);
+    const lineId =
+      input.lineId ??
+      (input.customization
+        ? buildCartLineId(input.dishId, input.customization)
+        : input.dishId);
+
+    const qtyToAdd = input.quantity ?? 1;
+    const existing = this.items.find((i) => i.lineId === lineId);
+
     if (existing) {
-      existing.quantity += 1;
+      existing.quantity += qtyToAdd;
     } else {
-      this.items.push({ ...item, quantity: 1 });
+      this.items.push({
+        ...input,
+        lineId,
+        quantity: qtyToAdd,
+      });
     }
     this.notify();
   }
 
-  removeItem(dishId: string) {
-    const existing = this.items.find((i) => i.dishId === dishId);
-    if (!existing) return;
+  removeItem(lineOrDishId: string) {
+    // Look up by lineId first
+    let index = this.items.findIndex((i) => i.lineId === lineOrDishId);
+    if (index === -1) {
+      // Fallback: look up by dishId
+      index = this.items.findIndex((i) => i.dishId === lineOrDishId);
+    }
+    if (index === -1) return;
 
-    if (existing.quantity > 1) {
-      existing.quantity -= 1;
+    const target = this.items[index];
+    if (target.quantity > 1) {
+      target.quantity -= 1;
     } else {
-      this.items = this.items.filter((i) => i.dishId !== dishId);
+      this.items.splice(index, 1);
     }
 
     if (this.items.length === 0) {
@@ -77,8 +110,34 @@ class CartStore {
     this.notify();
   }
 
-  getItemQuantity(dishId: string): number {
-    return this.items.find((i) => i.dishId === dishId)?.quantity || 0;
+  removeDish(dishId: string) {
+    this.items = this.items.filter((i) => i.dishId !== dishId);
+    if (this.items.length === 0) {
+      this.restaurantId = null;
+      this.restaurantName = null;
+    }
+    this.notify();
+  }
+
+  getItemQuantity(lineOrDishId: string): number {
+    const lineItem = this.items.find((i) => i.lineId === lineOrDishId);
+    if (lineItem) return lineItem.quantity;
+    return this.getDishTotalQuantity(lineOrDishId);
+  }
+
+  getDishTotalQuantity(dishId: string): number {
+    return this.items
+      .filter((i) => i.dishId === dishId)
+      .reduce((acc, item) => acc + item.quantity, 0);
+  }
+
+  getDishLines(dishId: string): CartItem[] {
+    return this.items.filter((i) => i.dishId === dishId);
+  }
+
+  getLastCustomization(dishId: string): CartItem | null {
+    const lines = this.getDishLines(dishId);
+    return lines.length > 0 ? lines[lines.length - 1] : null;
   }
 
   getSubtotalPaise(): number {

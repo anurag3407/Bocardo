@@ -48,8 +48,8 @@ export async function authenticateToken(token: string): Promise<AuthUser | null>
     let role = UserRole.CUSTOMER;
     let fullName = null;
 
-    // Decode Clerk Token (with local development mock fallback)
-    if (process.env.NODE_ENV === 'development' && process.env.ALLOW_MOCK_AUTH === 'true' && token.startsWith('mock_token_')) {
+    // Decode Clerk Token (with mock fallback for dev/demo)
+    if (process.env.ALLOW_MOCK_AUTH === 'true' && token.startsWith('mock_token_')) {
       const parts = token.split('_');
       role = (parts[2]?.toUpperCase() as UserRole) || UserRole.CUSTOMER;
       clerkId = `clerk_${role.toLowerCase()}_demo`;
@@ -70,7 +70,9 @@ export async function authenticateToken(token: string): Promise<AuthUser | null>
       email = decoded.email || null;
       phone = decoded.phone || null;
       fullName = decoded.name || null;
-      role = decoded.publicMetadata?.role || UserRole.CUSTOMER;
+      // SECURITY: never trust client-controllable Clerk metadata for RBAC.
+      // Role resolution order: server-managed env allowlist -> DB -> CUSTOMER.
+      role = UserRole.CUSTOMER;
     }
 
     if (!Object.values(UserRole).includes(role)) return null;
@@ -79,12 +81,34 @@ export async function authenticateToken(token: string): Promise<AuthUser | null>
     const userRes = await db.query(
       `INSERT INTO users (clerk_id, email, phone, full_name, role)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (clerk_id) DO UPDATE SET updated_at = NOW()
+       ON CONFLICT (clerk_id) DO UPDATE SET
+         updated_at = NOW(),
+         email = COALESCE(EXCLUDED.email, users.email),
+         phone = COALESCE(EXCLUDED.phone, users.phone),
+         full_name = COALESCE(EXCLUDED.full_name, users.full_name)
        RETURNING id, clerk_id as "clerkId", email, phone, full_name as "fullName", role, is_suspended as "isSuspended"`,
       [clerkId, email, phone, fullName, role]
     );
 
     const user = userRes.rows[0];
+
+    // Server-managed privilege grants (staff onboarding is out-of-band):
+    // PRIVILEGED_ROLES="admin@bocardo.in:ADMIN,rider@bocardo.in:RIDER"
+    const grants = (process.env.PRIVILEGED_ROLES || '')
+      .split(',')
+      .map((entry) => entry.trim().split(':'))
+      .filter(([e, r]) => e && r && Object.values(UserRole).includes(r as UserRole));
+    const grant = grants.find(([e]) => email && e.toLowerCase() === email.toLowerCase());
+    if (grant) {
+      role = grant[1] as UserRole;
+      if (user.role !== role) {
+        await db.query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', [role, user.id]);
+        user.role = role;
+      }
+    } else if (user.role && user.role !== role) {
+      // DB is source of truth for previously-granted roles (e.g. restaurant owner set by admin)
+      role = user.role;
+    }
 
     // If restaurant partner, fetch associated restaurant_id
     let restaurantId: string | null = null;

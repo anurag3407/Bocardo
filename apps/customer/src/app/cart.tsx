@@ -11,8 +11,27 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { formatPaiseToRupees } from '@bocardo/shared-types';
+import { formatPaiseToRupees, FoodType } from '@bocardo/shared-types';
 import { cartStore, CartItem } from '../lib/cart';
+import { FssaiBadge } from '../components/FssaiBadge';
+import { trpc } from '../lib/api';
+
+interface UpsellDish {
+  id: string;
+  name: string;
+  pricePaise: number;
+  isVeg: boolean;
+  restaurantId?: string;
+}
+
+const DEFAULT_UPSELL: UpsellDish[] = [
+  {
+    id: 'dish-upsell-raita',
+    name: 'Burani Garlic Raita',
+    pricePaise: 6000,
+    isVeg: true,
+  },
+];
 
 export default function CartScreen() {
   const router = useRouter();
@@ -20,11 +39,35 @@ export default function CartScreen() {
   const [tipPaise, setTipPaise] = useState(3000); // ₹30 default tip
   const [instructions, setInstructions] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [upsellItems, setUpsellItems] = useState<UpsellDish[]>(DEFAULT_UPSELL);
 
   useEffect(() => {
     setItems(cartStore.getItems());
     return cartStore.subscribe(() => setItems(cartStore.getItems()));
   }, []);
+
+  useEffect(() => {
+    const currentItems = cartStore.getItems();
+    const restId = cartStore.getRestaurantId();
+    if (currentItems.length > 0) {
+      const dishIds = [...new Set(currentItems.map((i) => i.dishId))].filter(Boolean);
+      // Fetch live co-occurrence pairings from recommendations router
+      trpc.recommendations.frequentlyBoughtTogether
+        .query({
+          dishIds,
+          restaurantId: restId || undefined,
+          limit: 4,
+        })
+        .then((pairings: any) => {
+          if (pairings && pairings.length > 0) {
+            setUpsellItems(pairings);
+          }
+        })
+        .catch(() => {
+          // Keep default fallback gracefully
+        });
+    }
+  }, [items]);
 
   const totals = cartStore.getTotals();
   const grandTotalPaise = totals.totalAmountPaise + tipPaise;
@@ -34,11 +77,50 @@ export default function CartScreen() {
     setIsSubmitting(true);
 
     try {
-      // Simulate/call checkout API
-      const simulatedOrderId = `ord-${Date.now()}`;
-      // In local dev, clear cart and navigate to live tracking
+      let restId = cartStore.getRestaurantId();
+      let orderItems = items.map((i) => ({ dishId: i.dishId, quantity: i.quantity }));
+
+      const isUuid = (id?: string) =>
+        typeof id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+      // Demo/dev mode: if mock string IDs are in cart, resolve to real database entities
+      if (!restId || !isUuid(restId) || orderItems.some((i) => !isUuid(i.dishId))) {
+        try {
+          const nearby = await trpc.restaurant.listNearby.query({
+            latitude: 12.9716,
+            longitude: 77.6408,
+          });
+          if (nearby && nearby.length > 0) {
+            const liveRest = await trpc.restaurant.getById.query({ restaurantId: nearby[0].id });
+            if (liveRest && liveRest.dishes && liveRest.dishes.length > 0) {
+              restId = liveRest.id;
+              orderItems = [
+                { dishId: liveRest.dishes[0].id, quantity: items[0]?.quantity || 1 },
+              ];
+            }
+          }
+        } catch {
+          // If offline or listNearby fails, proceed with existing IDs
+        }
+      }
+
+      if (!restId) {
+        throw new Error('Restaurant details are unavailable. Please reselect your meal.');
+      }
+
+      const orderResult = await trpc.order.create.mutate({
+        restaurantId: restId,
+        items: orderItems,
+        deliveryLatitude: 12.9716,
+        deliveryLongitude: 77.6408,
+        deliveryAddress: '42, 100 Feet Road, Indiranagar, Bengaluru 560038',
+        specialInstructions: instructions.trim() || undefined,
+        tipPaise,
+      });
+
       cartStore.clear();
-      router.replace(`/orders/${simulatedOrderId}`);
+      router.replace(`/orders/${orderResult.orderId}`);
     } catch (e: any) {
       Alert.alert('Checkout Failed', e.message || 'Please try again.');
     } finally {
@@ -51,7 +133,9 @@ export default function CartScreen() {
       <SafeAreaView style={styles.emptyContainer}>
         <Text style={styles.emptyIcon}>🛒</Text>
         <Text style={styles.emptyTitle}>Your cart is empty</Text>
-        <Text style={styles.emptySubtitle}>Explore top restaurants around you and add delicious dishes!</Text>
+        <Text style={styles.emptySubtitle}>
+          Explore top restaurants around you and add delicious dishes!
+        </Text>
         <TouchableOpacity style={styles.browseButton} onPress={() => router.back()}>
           <Text style={styles.browseButtonText}>Browse Restaurants</Text>
         </TouchableOpacity>
@@ -61,35 +145,79 @@ export default function CartScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Navbar */}
+      <View style={styles.navbar}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Text style={styles.backBtnText}>←</Text>
+        </TouchableOpacity>
+        <View style={styles.navTitleCol}>
+          <Text style={styles.navTitle}>{cartStore.getRestaurantName()}</Text>
+          <Text style={styles.navSub}>Delivery to Indiranagar 100ft Rd</Text>
+        </View>
+      </View>
+
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Restaurant Badge */}
-        <View style={styles.card}>
-          <Text style={styles.restName}>{cartStore.getRestaurantName()}</Text>
-          <Text style={styles.restDeliveryTime}>Delivery to: Indiranagar 100ft Rd (25-30 mins)</Text>
+        {/* Delivery ETA Alert */}
+        <View style={styles.etaBanner}>
+          <Text style={styles.etaIcon}>⚡</Text>
+          <Text style={styles.etaText}>Delivery in 25-30 mins to Indiranagar 100ft Rd</Text>
         </View>
 
         {/* Cart Items List */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Your Items</Text>
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>Item Summary</Text>
+            <Text style={styles.itemsCountBadge}>
+              {items.reduce((sum, i) => sum + i.quantity, 0)} items
+            </Text>
+          </View>
+
           {items.map((item) => (
-            <View key={item.dishId} style={styles.itemRow}>
-              <View style={styles.itemInfo}>
-                <Text style={styles.itemName}>{item.name}</Text>
+            <View key={item.lineId} style={styles.itemRow}>
+              <View style={styles.itemLeft}>
+                <View style={styles.itemNameRow}>
+                  <FssaiBadge foodType={item.isVeg ? FoodType.VEG : FoodType.NON_VEG} size={14} />
+                  <Text style={styles.itemName} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </View>
+
+                {/* Customization Details */}
+                {(item.variantName || (item.addOnSummary && item.addOnSummary.length > 0)) && (
+                  <View style={styles.customizationBox}>
+                    {item.variantName && (
+                      <Text style={styles.customizationText}>Portion: {item.variantName}</Text>
+                    )}
+                    {item.addOnSummary && item.addOnSummary.length > 0 && (
+                      <Text style={styles.customizationText}>
+                        + {item.addOnSummary.join(', ')}
+                      </Text>
+                    )}
+                  </View>
+                )}
+
                 <Text style={styles.itemPrice}>
                   {formatPaiseToRupees(item.pricePaise * item.quantity)}
                 </Text>
               </View>
+
+              {/* Stepper mapped directly to lineId */}
               <View style={styles.stepperContainer}>
                 <TouchableOpacity
                   style={styles.stepperBtn}
-                  onPress={() => cartStore.removeItem(item.dishId)}
+                  onPress={() => cartStore.removeItem(item.lineId)}
                 >
                   <Text style={styles.stepperText}>−</Text>
                 </TouchableOpacity>
                 <Text style={styles.qtyText}>{item.quantity}</Text>
                 <TouchableOpacity
                   style={styles.stepperBtn}
-                  onPress={() => cartStore.addItem(item)}
+                  onPress={() =>
+                    cartStore.addItem({
+                      ...item,
+                      quantity: 1,
+                    })
+                  }
                 >
                   <Text style={styles.stepperText}>+</Text>
                 </TouchableOpacity>
@@ -98,39 +226,48 @@ export default function CartScreen() {
           ))}
         </View>
 
-        {/* Frequently Bought Together Upsell Tray */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Complete Your Meal ✨</Text>
-          <Text style={styles.cardSubtitle}>Frequently ordered together</Text>
-          <View style={styles.upsellRow}>
-            <View style={styles.upsellItem}>
-              <View>
-                <Text style={styles.upsellName}>Burani Garlic Raita</Text>
-                <Text style={styles.upsellPrice}>{formatPaiseToRupees(6000)}</Text>
+        {/* Co-Occurrence Upsell Tray ("Complete Your Meal") */}
+        {upsellItems.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Complete Your Meal ✨</Text>
+            <Text style={styles.cardSubtitle}>Frequently ordered together</Text>
+            {upsellItems.map((upsell) => (
+              <View key={upsell.id} style={styles.upsellRow}>
+                <View style={styles.upsellItem}>
+                  <View style={styles.upsellDetails}>
+                    <View style={styles.upsellBadgeRow}>
+                      <FssaiBadge foodType={upsell.isVeg ? FoodType.VEG : FoodType.NON_VEG} size={12} />
+                      <Text style={styles.upsellName} numberOfLines={1}>{upsell.name}</Text>
+                    </View>
+                    <Text style={styles.upsellPrice}>{formatPaiseToRupees(upsell.pricePaise)}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.upsellAddBtn}
+                    onPress={() =>
+                      cartStore.addItem({
+                        dishId: upsell.id,
+                        name: upsell.name,
+                        pricePaise: upsell.pricePaise,
+                        isVeg: upsell.isVeg,
+                        restaurantId: upsell.restaurantId || cartStore.getRestaurantId()!,
+                        restaurantName: cartStore.getRestaurantName()!,
+                      })
+                    }
+                  >
+                    <Text style={styles.upsellAddText}>+ ADD</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              <TouchableOpacity
-                style={styles.upsellAddBtn}
-                onPress={() =>
-                  cartStore.addItem({
-                    dishId: 'dish-3-uuid',
-                    name: 'Burani Garlic Raita',
-                    pricePaise: 6000,
-                    isVeg: true,
-                    restaurantId: cartStore.getRestaurantId()!,
-                    restaurantName: cartStore.getRestaurantName()!,
-                  })
-                }
-              >
-                <Text style={styles.upsellAddText}>+ ADD</Text>
-              </TouchableOpacity>
-            </View>
+            ))}
           </View>
-        </View>
+        )}
 
         {/* Tip Your Delivery Partner */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Delivery Partner Tip</Text>
-          <Text style={styles.cardSubtitle}>100% of the tip goes directly to your delivery partner</Text>
+          <Text style={styles.cardSubtitle}>
+            100% of the tip goes directly to your delivery partner
+          </Text>
           <View style={styles.tipRow}>
             {[
               { label: '₹20', paise: 2000 },
@@ -150,9 +287,9 @@ export default function CartScreen() {
           </View>
         </View>
 
-        {/* Cooking Instructions */}
+        {/* Delivery / Cooking Instructions */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Delivery Notes</Text>
+          <Text style={styles.cardTitle}>Delivery Instructions</Text>
           <TextInput
             placeholder="e.g. Please leave at door, don't ring bell..."
             placeholderTextColor="#94A3B8"
@@ -164,7 +301,7 @@ export default function CartScreen() {
 
         {/* Section 9(5) CGST Dual-Tax Itemized Bill */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Bill Summary</Text>
+          <Text style={styles.cardTitle}>Bill Details</Text>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Item Total</Text>
             <Text style={styles.billValue}>{formatPaiseToRupees(totals.subtotalPaise)}</Text>
@@ -178,11 +315,11 @@ export default function CartScreen() {
             <Text style={styles.billValue}>{formatPaiseToRupees(totals.deliveryFeePaise)}</Text>
           </View>
           <View style={styles.billRow}>
-            <Text style={styles.billLabel}>Platform Service Fee</Text>
+            <Text style={styles.billLabel}>Platform Convenience Fee</Text>
             <Text style={styles.billValue}>{formatPaiseToRupees(totals.platformFeePaise)}</Text>
           </View>
           <View style={styles.billRow}>
-            <Text style={styles.billLabel}>Service GST (18% on convenience)</Text>
+            <Text style={styles.billLabel}>Service GST (18% on fees)</Text>
             <Text style={styles.billValue}>{formatPaiseToRupees(totals.serviceGstPaise)}</Text>
           </View>
           {tipPaise > 0 && (
@@ -198,11 +335,11 @@ export default function CartScreen() {
         </View>
       </ScrollView>
 
-      {/* Pay Now Button */}
+      {/* High-Contrast Checkout Bar */}
       <View style={styles.checkoutBar}>
         <View>
           <Text style={styles.checkoutTotal}>{formatPaiseToRupees(grandTotalPaise)}</Text>
-          <Text style={styles.checkoutViewBill}>VIEW DETAILED BILL</Text>
+          <Text style={styles.checkoutViewBill}>INCL. ALL TAXES & CHARGES</Text>
         </View>
         <TouchableOpacity
           style={styles.payButton}
@@ -221,14 +358,42 @@ export default function CartScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F1F5F9' },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  navbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  backBtn: { padding: 4, marginRight: 10 },
+  backBtnText: { fontSize: 20, fontWeight: '700', color: '#0F172A' },
+  navTitleCol: { flex: 1 },
+  navTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  navSub: { fontSize: 11, color: '#64748B', marginTop: 1 },
   scrollContent: { padding: 16, paddingBottom: 110 },
+  etaBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDFA',
+    borderWidth: 1,
+    borderColor: '#CCFBF1',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+    gap: 8,
+  },
+  etaIcon: { fontSize: 16 },
+  etaText: { fontSize: 12, fontWeight: '700', color: '#0F766E' },
   emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   emptyIcon: { fontSize: 64, marginBottom: 12 },
   emptyTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
   emptySubtitle: { fontSize: 14, color: '#64748B', textAlign: 'center', marginTop: 6 },
   browseButton: {
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 12,
@@ -243,42 +408,52 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  restName: { fontSize: 17, fontWeight: '800', color: '#0F172A' },
-  restDeliveryTime: { fontSize: 13, color: '#64748B', marginTop: 4 },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 8 },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A' },
+  itemsCountBadge: { fontSize: 12, fontWeight: '700', color: '#0D9488' },
   cardSubtitle: { fontSize: 12, color: '#64748B', marginBottom: 10 },
   itemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F8FAFC',
   },
-  itemInfo: { flex: 1 },
-  itemName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
-  itemPrice: { fontSize: 13, fontWeight: '800', color: '#334155', marginTop: 2 },
+  itemLeft: { flex: 1, paddingRight: 10 },
+  itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  itemName: { fontSize: 14, fontWeight: '700', color: '#0F172A', flex: 1 },
+  customizationBox: { marginTop: 3, paddingLeft: 20 },
+  customizationText: { fontSize: 11, color: '#64748B' },
+  itemPrice: { fontSize: 13, fontWeight: '800', color: '#1E293B', marginTop: 4, paddingLeft: 20 },
   stepperContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF2E8',
+    backgroundColor: '#F0FDFA',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#FC8019',
+    borderColor: '#0D9488',
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   stepperBtn: { paddingHorizontal: 6 },
-  stepperText: { color: '#FC8019', fontWeight: '800', fontSize: 16 },
-  qtyText: { color: '#FC8019', fontWeight: '800', fontSize: 14, marginHorizontal: 8 },
+  stepperText: { color: '#0D9488', fontWeight: '800', fontSize: 16 },
+  qtyText: { color: '#0D9488', fontWeight: '800', fontSize: 14, marginHorizontal: 8 },
   upsellRow: {
     backgroundColor: '#F8FAFC',
     borderRadius: 10,
     padding: 12,
   },
   upsellItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  upsellName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
-  upsellPrice: { fontSize: 12, color: '#64748B', marginTop: 2 },
+  upsellDetails: { flex: 1 },
+  upsellBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  upsellName: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  upsellPrice: { fontSize: 12, color: '#64748B', marginTop: 2, paddingLeft: 18 },
   upsellAddBtn: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
@@ -297,9 +472,9 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     alignItems: 'center',
   },
-  tipChipActive: { backgroundColor: '#FFF2E8', borderColor: '#FC8019' },
+  tipChipActive: { backgroundColor: '#F0FDFA', borderColor: '#0D9488' },
   tipText: { fontWeight: '700', color: '#475569' },
-  tipTextActive: { color: '#FC8019' },
+  tipTextActive: { color: '#0D9488', fontWeight: '800' },
   instructionInput: {
     backgroundColor: '#F8FAFC',
     borderRadius: 8,
@@ -319,7 +494,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   grandTotalLabel: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
-  grandTotalValue: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  grandTotalValue: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
   checkoutBar: {
     position: 'absolute',
     bottom: 0,
@@ -335,12 +510,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   checkoutTotal: { fontSize: 18, fontWeight: '900', color: '#0F172A' },
-  checkoutViewBill: { fontSize: 10, fontWeight: '800', color: '#FC8019', marginTop: 2 },
+  checkoutViewBill: { fontSize: 9, fontWeight: '800', color: '#0D9488', marginTop: 2, letterSpacing: 0.5 },
   payButton: {
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
     paddingHorizontal: 24,
     paddingVertical: 14,
     borderRadius: 12,
+    shadowColor: '#0D9488',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
   },
   payButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
 });

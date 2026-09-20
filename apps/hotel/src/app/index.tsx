@@ -336,7 +336,7 @@ const styles = StyleSheet.create({
   },
   acceptButtonText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   readyButton: {
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',

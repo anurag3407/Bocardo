@@ -143,7 +143,7 @@ const styles = StyleSheet.create({
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
   },
   payoutCard: {
     backgroundColor: '#0F172A',

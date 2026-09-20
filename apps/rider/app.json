@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "scheme": "bocardo-rider",
     "splash": {
-      "backgroundColor": "#FC8019"
+      "backgroundColor": "#0D9488"
     },
     "ios": {
       "supportsTablet": false,
@@ -19,7 +19,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#FC8019"
+        "backgroundColor": "#0D9488"
       },
       "package": "in.bocardo.rider",
       "permissions": [

@@ -7,5 +7,5 @@
     }
   },
   "include": ["src/**/*", "expo-env.d.ts"],
-  "exclude": ["node_modules", "src/**/*.test.ts"]
+  "exclude": ["**/*.test.ts"]
 }

@@ -8,9 +8,9 @@ export const restaurantRouter = router({
   listNearby: publicProcedure
     .input(
       z.object({
-        latitude: z.number(),
-        longitude: z.number(),
-        radiusMeters: z.number().default(7000),
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        radiusMeters: z.number().int().min(500).max(15000).default(7000),
       })
     )
     .query(async ({ input }) => {
@@ -56,6 +56,59 @@ export const restaurantRouter = router({
         dishes: dishesRes.rows,
       };
     }),
+
+  /**
+   * Full-text dish & restaurant search (Swiggy-style discovery).
+   * Ranked: exact restaurant match > dish name match > cuisine match.
+   */
+  search: publicProcedure
+    .input(
+      z.object({
+        query: z.string().trim().min(2).max(80),
+        latitude: z.number().min(-90).max(90).optional(),
+        longitude: z.number().min(-180).max(180).optional(),
+        limit: z.number().int().min(1).max(30).default(15),
+      })
+    )
+    .query(async ({ input }) => {
+      const pattern = `%${input.query.replace(/[%_\\]/g, '')}%`;
+
+      const params: any[] = [pattern, input.limit];
+      let geoSelect = 'NULL::float as "distanceMeters"';
+      let geoFilter = '';
+      if (input.latitude !== undefined && input.longitude !== undefined) {
+        params.push(input.longitude, input.latitude);
+        geoSelect = `ST_Distance(r.location, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography)::float as "distanceMeters"`;
+        geoFilter = `AND ST_DWithin(r.location, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography, 10000)`;
+      }
+
+      const sql = `
+        SELECT d.id as "dishId", d.name as "dishName", d.price_paise as "pricePaise",
+               d.image_url as "imageUrl", d.is_veg as "isVeg",
+               r.id as "restaurantId", r.name as "restaurantName", r.rating::float,
+               ${geoSelect},
+               CASE
+                 WHEN r.name ILIKE $1 THEN 0
+                 WHEN d.name ILIKE $1 THEN 1
+                 ELSE 2
+               END as rank
+        FROM dishes d
+        JOIN restaurants r ON d.restaurant_id = r.id
+        WHERE d.is_available = TRUE
+          AND r.is_active = TRUE
+          AND r.is_accepting_orders = TRUE
+          AND (d.name ILIKE $1 OR r.name ILIKE $1 OR EXISTS (
+            SELECT 1 FROM unnest(r.cuisine) c WHERE c ILIKE $1
+          ))
+          ${geoFilter}
+        ORDER BY rank ASC, r.rating DESC
+        LIMIT $2
+      `;
+
+      const res = await db.query(sql, params);
+      return res.rows;
+    }),
+
 
   /**
    * Kitchen Partner switches online/offline status

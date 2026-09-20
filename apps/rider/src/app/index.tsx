@@ -10,8 +10,10 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { DispatchOfferPayload, formatPaiseToRupees } from '@bocardo/shared-types';
+import io from 'socket.io-client';
 import { riderLocationStream } from '../services/locationStream';
 import { DispatchOfferModal } from '../components/DispatchOfferModal';
+import { trpc, API_URL } from '../lib/api';
 
 export default function RiderDashboardScreen() {
   const router = useRouter();
@@ -20,12 +22,31 @@ export default function RiderDashboardScreen() {
   const [incomingOffer, setIncomingOffer] = useState<DispatchOfferPayload | null>(null);
 
   useEffect(() => {
+    let socket: any = null;
     if (isOnline) {
-      riderLocationStream.startStreaming('rider-demo-uuid');
+      riderLocationStream.startStreaming('rider-demo-uuid', undefined, API_URL);
+
+      try {
+        socket = io(API_URL, {
+          auth: { token: 'mock_token_rider_user' },
+          transports: ['websocket', 'polling'],
+        });
+        socket.on('dispatch:offer', (offer: DispatchOfferPayload) => {
+          setIncomingOffer(offer);
+        });
+      } catch {
+        // fallback for tests
+      }
     } else {
       riderLocationStream.stopStreaming();
     }
-    return riderLocationStream.subscribe(setCurrentCoord);
+    const unsub = riderLocationStream.subscribe(setCurrentCoord);
+    return () => {
+      unsub();
+      if (socket) {
+        socket.disconnect();
+      }
+    };
   }, [isOnline]);
 
   const handleSimulateOffer = () => {
@@ -43,13 +64,29 @@ export default function RiderDashboardScreen() {
     setIncomingOffer(mockOffer);
   };
 
-  const handleAcceptOffer = (orderId: string) => {
+  const handleAcceptOffer = async (orderId: string) => {
     setIncomingOffer(null);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+    if (isUuid) {
+      try {
+        await trpc.rider.respondToDispatchOffer.mutate({ orderId, accepted: true });
+      } catch (err: any) {
+        console.warn('Accept offer warning:', err.message);
+      }
+    }
     router.push(`/delivery/${orderId}`);
   };
 
-  const handleDeclineOffer = (_orderId: string) => {
+  const handleDeclineOffer = async (orderId: string) => {
     setIncomingOffer(null);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+    if (isUuid) {
+      try {
+        await trpc.rider.respondToDispatchOffer.mutate({ orderId, accepted: false });
+      } catch {
+        // safe no-op
+      }
+    }
   };
 
   return (
@@ -191,7 +228,7 @@ const styles = StyleSheet.create({
   statVal: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
   statLabel: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
   demoTriggerButton: {
-    backgroundColor: '#FC8019',
+    backgroundColor: '#0D9488',
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',

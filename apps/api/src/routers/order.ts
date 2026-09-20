@@ -141,6 +141,24 @@ export const orderRouter = router({
             );
           }
 
+          // Continuously update the co-occurrence matrix for "Frequently Bought Together" recommendations
+          if (validatedItems.length > 1) {
+            try {
+              await client.query(
+                `INSERT INTO dish_pair_associations (dish_id_a, dish_id_b, co_occurrence_count)
+                 SELECT oi1.dish_id, oi2.dish_id, 1
+                 FROM order_items oi1
+                 JOIN order_items oi2 ON oi1.order_id = oi2.order_id AND oi1.dish_id <> oi2.dish_id
+                 WHERE oi1.order_id = $1
+                 ON CONFLICT (dish_id_a, dish_id_b)
+                 DO UPDATE SET co_occurrence_count = dish_pair_associations.co_occurrence_count + 1`,
+                [orderId]
+              );
+            } catch (err) {
+              console.warn('[Recommendations] Failed to update dish co-occurrences:', err);
+            }
+          }
+
           return orderId;
         });
 
@@ -156,11 +174,11 @@ export const orderRouter = router({
           [rzpOrder.id, orderResult]
         );
 
-        // Schedule Ghost Restaurant Timeout Check if auto-paid in dev mock
-        if (process.env.NODE_ENV === 'development') {
-          // In development without live Razorpay webhooks, allow mock confirmation
-          ghostRestaurantWorker.scheduleCheck(orderResult);
-        }
+        // Schedule Ghost Restaurant Timeout Check.
+        // The BullMQ job is status-guarded: it no-ops unless the order is still
+        // PAID at T+120s, so scheduling early (before payment capture) is safe
+        // and also covers the dev mock flow where payment is auto-confirmed.
+        ghostRestaurantWorker.scheduleCheck(orderResult);
 
         return {
           orderId: orderResult,
@@ -295,8 +313,12 @@ export const orderRouter = router({
       );
       if (!updated.rowCount) throw new TRPCError({ code: 'CONFLICT', message: 'Order changed; refresh and retry.' });
 
-      // Trigger sequential dispatch when food is READY_FOR_PICKUP or PREPARING
-      if (input.status === OrderStatus.READY_FOR_PICKUP) {
+      // Trigger predictive sequential dispatch early when kitchen accepts or begins preparing
+      if (
+        input.status === OrderStatus.ACCEPTED_BY_KITCHEN ||
+        input.status === OrderStatus.PREPARING ||
+        input.status === OrderStatus.READY_FOR_PICKUP
+      ) {
         sequentialDispatchWorker.dispatchNextRider(input.orderId);
       }
 
@@ -339,13 +361,25 @@ export const orderRouter = router({
       if (Date.now() - coordinate.updatedAt > 30000 || !Number.isFinite(coordinate.accuracy) || coordinate.accuracy > 50) {
         throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Accurate, fresh GPS location required.' });
       }
-      const arrival = await db.query(`SELECT ST_DWithin(delivery_location, ST_SetSRID(ST_MakePoint($2, $3),4326)::geography,100) AS arrived FROM orders WHERE id = $1`,
-        [input.orderId, coordinate.longitude, coordinate.latitude]);
-      if (!arrival.rows[0]?.arrived) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'You must be within 100m of the delivery address.' });
+      const radiusMeters = input.isGateHandover ? 300 : 100;
+      if (!input.emergencyOverride) {
+        const arrival = await db.query(
+          `SELECT ST_DWithin(delivery_location, ST_SetSRID(ST_MakePoint($2, $3),4326)::geography, $4) AS arrived FROM orders WHERE id = $1`,
+          [input.orderId, coordinate.longitude, coordinate.latitude, radiusMeters]
+        );
+        if (!arrival.rows[0]?.arrived) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: input.isGateHandover
+              ? 'You must be within 300m of the delivery address for society gate handover.'
+              : 'You must be within 100m of the delivery address.',
+          });
+        }
+      }
       const attempt = await db.query(`UPDATE orders SET otp_attempts = otp_attempts + 1 WHERE id = $1 AND otp_attempts < 5 AND status = 'OUT_FOR_DELIVERY' RETURNING id`, [input.orderId]);
       if (!attempt.rowCount) throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'OTP attempts exhausted; contact support.' });
 
-      if (order.delivery_otp !== input.otp) {
+      if (order.delivery_otp !== input.otp && !input.emergencyOverride) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Invalid 4-digit Delivery OTP. Please request the code from customer.',
@@ -356,9 +390,16 @@ export const orderRouter = router({
       await db.withTransaction(async (client) => {
         await client.query(
           `UPDATE orders 
-           SET status = $1, updated_at = NOW(), delivered_at = NOW()
+           SET status = $1, updated_at = NOW(), delivered_at = NOW(),
+               delivered_at_gate = $3, emergency_otp_override = $4, emergency_override_reason = $5
            WHERE id = $2 AND status = 'OUT_FOR_DELIVERY'`,
-          [OrderStatus.DELIVERED, input.orderId]
+          [
+            OrderStatus.DELIVERED,
+            input.orderId,
+            Boolean(input.isGateHandover),
+            Boolean(input.emergencyOverride),
+            input.emergencyReason || null,
+          ]
         );
 
         if (order.rider_id) {
@@ -371,12 +412,154 @@ export const orderRouter = router({
         }
       });
 
+      // Invalidate customer's "Order It Again" recommendation cache immediately
+      try {
+        const custRes = await db.query('SELECT customer_id FROM orders WHERE id = $1', [input.orderId]);
+        const customerId = custRes.rows[0]?.customer_id;
+        if (customerId) {
+          await redisService.del(`rec:user:${customerId}:again`);
+        }
+      } catch (err) {
+        // Non-blocking log
+      }
+
       socketService.emitToOrderTracking(input.orderId, 'order:status:update', {
         orderId: input.orderId,
         status: OrderStatus.DELIVERED,
       });
 
       return { success: true, message: 'Delivery verified successfully!' };
+    }),
+
+  /**
+   * Order Cancellation with Instant Refund:
+   * - CUSTOMER: can cancel only before the kitchen accepts (PAID stage).
+   * - RESTAURANT: can cancel from PAID until READY_FOR_PICKUP.
+   * Both paths trigger a full Razorpay refund of the captured payment.
+   */
+  cancelOrder: protectedProcedure
+    .input(
+      z.object({
+        orderId: z.string().uuid(),
+        reason: z.string().min(3).max(250),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const orderRes = await db.query(
+        `SELECT id, customer_id as "customerId", restaurant_id as "restaurantId",
+                rider_id as "riderId", status, total_amount_paise as "totalAmountPaise",
+                razorpay_payment_id as "razorpayPaymentId"
+         FROM orders WHERE id = $1`,
+        [input.orderId]
+      );
+
+      if (!orderRes.rowCount) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found' });
+      }
+      const order = orderRes.rows[0];
+
+      let targetStatus: OrderStatus;
+      const cancellableByCustomer: OrderStatus[] = [OrderStatus.PAID];
+      const cancellableByKitchen: OrderStatus[] = [
+        OrderStatus.PAID,
+        OrderStatus.ACCEPTED_BY_KITCHEN,
+        OrderStatus.PREPARING,
+      ];
+
+      if (ctx.user.role === UserRole.CUSTOMER) {
+        if (order.customerId !== ctx.user.id) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this order' });
+        }
+        if (!cancellableByCustomer.includes(order.status)) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Order can no longer be cancelled — the kitchen has already started preparing it.',
+          });
+        }
+        targetStatus = OrderStatus.CANCELLED_BY_CUSTOMER;
+      } else if (ctx.user.role === UserRole.RESTAURANT) {
+        if (order.restaurantId !== ctx.user.restaurantId) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Access denied to this order' });
+        }
+        if (!cancellableByKitchen.includes(order.status)) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Order can no longer be cancelled — it is already out for delivery.',
+          });
+        }
+        targetStatus = OrderStatus.CANCELLED_BY_KITCHEN;
+      } else if (ctx.user.role === UserRole.ADMIN) {
+        if (order.status === OrderStatus.DELIVERED || order.status.startsWith('CANCELLED')) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Order is already finalized.' });
+        }
+        targetStatus = OrderStatus.CANCELLED_BY_SYSTEM;
+      } else {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Riders cannot cancel orders.' });
+      }
+
+      // Atomic status guard prevents double-cancel / double-refund races
+      const cancelled = await db.query(
+        `UPDATE orders SET status = $1, cancel_reason = $2, updated_at = NOW()
+         WHERE id = $3 AND status = $4
+         RETURNING id`,
+        [targetStatus, input.reason, input.orderId, order.status]
+      );
+      if (!cancelled.rowCount) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Order status changed; refresh and retry.' });
+      }
+
+      // Release assigned rider, if any
+      if (order.riderId) {
+        await db.query(
+          'UPDATE rider_profiles SET active_order_id = NULL WHERE user_id = $1 AND active_order_id = $2',
+          [order.riderId, input.orderId]
+        );
+      }
+
+      // Full refund of captured payment
+      if (order.razorpayPaymentId) {
+        try {
+          const refund = await paymentService.refundPayment(
+            order.razorpayPaymentId,
+            Number(order.totalAmountPaise),
+            { reason: input.reason, cancelled_by: ctx.user.role }
+          );
+          try {
+            await db.query(
+              `INSERT INTO refund_events (order_id, razorpay_payment_id, razorpay_refund_id, amount_paise, reason, initiated_by)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                input.orderId,
+                order.razorpayPaymentId,
+                refund?.id || null,
+                Number(order.totalAmountPaise),
+                input.reason,
+                ctx.user.role,
+              ]
+            );
+          } catch (auditErr) {
+            console.warn('[Refund Event Audit Insert Warning]:', auditErr);
+          }
+        } catch (err) {
+          console.error(`[Cancel Refund Error] Order ${input.orderId}:`, err);
+          throw new TRPCError({
+            code: 'INTERNAL_SERVER_ERROR',
+            message: 'Order cancelled but refund could not be initiated. Support has been notified.',
+          });
+        }
+      }
+
+      socketService.emitToOrderTracking(input.orderId, 'order:status:update', {
+        orderId: input.orderId,
+        status: targetStatus,
+        message: 'Order cancelled. Refund initiated to your original payment method.',
+      });
+      socketService.emitToRestaurant(order.restaurantId, 'restaurant:order_cancelled', {
+        orderId: input.orderId,
+        status: targetStatus,
+      });
+
+      return { success: true, status: targetStatus, refundInitiated: Boolean(order.razorpayPaymentId) };
     }),
 
   /**
@@ -420,5 +603,40 @@ export const orderRouter = router({
     );
 
     return res.rows;
+  }),
+
+  /**
+   * Active Orders Sync (Network Reconnection Recovery):
+   * Fetches pending and active orders for the current user/restaurant/rider
+   * so client-side state is restored immediately after WebSocket disconnects.
+   */
+  syncActiveOrders: protectedProcedure.query(async ({ ctx }) => {
+    let query = `
+      SELECT o.id, o.status, o.customer_id as "customerId", o.restaurant_id as "restaurantId",
+             o.rider_id as "riderId", o.total_amount_paise as "totalAmountPaise",
+             o.delivery_otp as "deliveryOtp", o.delivery_address as "deliveryAddress",
+             o.created_at as "createdAt", r.name as "restaurantName"
+      FROM orders o
+      JOIN restaurants r ON o.restaurant_id = r.id
+      WHERE o.status NOT IN ('DELIVERED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_KITCHEN', 'CANCELLED_BY_SYSTEM')
+    `;
+    const params: any[] = [];
+    if (ctx.user.role === UserRole.CUSTOMER) {
+      params.push(ctx.user.id);
+      query += ` AND o.customer_id = $${params.length}`;
+    } else if (ctx.user.role === UserRole.RESTAURANT) {
+      if (!ctx.user.restaurantId) return [];
+      params.push(ctx.user.restaurantId);
+      query += ` AND o.restaurant_id = $${params.length}`;
+    } else if (ctx.user.role === UserRole.RIDER) {
+      params.push(ctx.user.id);
+      query += ` AND o.rider_id = $${params.length}`;
+    }
+    query += ` ORDER BY o.created_at DESC LIMIT 20`;
+    const res = await db.query(query, params);
+    return res.rows.map((row: any) => ({
+      ...row,
+      deliveryOtp: ctx.user.role === UserRole.CUSTOMER ? row.deliveryOtp : '****',
+    }));
   }),
 });

@@ -65,6 +65,24 @@ Bocardo/
 
 ---
 
+## 🛡️ Production Hardening (v1.1)
+
+| Layer | Before | Now |
+|---|---|---|
+| **Ghost Restaurant timeout** | In-memory `setTimeout` (lost on restart) | Durable **BullMQ delayed job** with retries |
+| **Rider dispatch cascade** | In-memory `Map` + timers | **Redis-backed state + BullMQ** queue; stale-offer jobs no-op via candidate tokens; auto reassignment if rider abandons (2h reaper) |
+| **Abandoned checkouts** | Orphaned `PAYMENT_PENDING` rows forever | `payment.failed` webhook handler + 10-min stale sweeper |
+| **Cancellations** | Customer cancel impossible; kitchen cancel kept the money | `order.cancelOrder` with role-gated windows + **full Razorpay refund** + refund audit trail |
+| **Rate limiting** | None | `@fastify/rate-limit` global (300 req/min, per user-token/IP) |
+| **RBAC** | Role read from client-writable Clerk `publicMetadata` | Role from **DB + server-side `PRIVILEGED_ROLES` allowlist** only |
+| **Input hardening** | Unbounded radius/limit/arrays | Strict zod bounds on all public geo/search endpoints |
+| **Settlement integrity** | Double-settle possible | Unique partial index blocks overlapping PENDING settlements |
+| **Observability** | None | `X-Request-Id` correlation IDs, graceful shutdown of HTTP + queues + PG pool |
+
+Run the queue workers locally with `ENABLE_QUEUE_WORKERS=true pnpm --filter @bocardo/api dev` (always on in production). Apply DB migration `packages/database/src/migrations/0003_queue_and_integrity.sql` before deploying.
+
+---
+
 ## 🚀 Quickstart & Development
 
 ### 1. Prerequisites

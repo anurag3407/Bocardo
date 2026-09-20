@@ -4,6 +4,7 @@ import { z } from 'zod';
 interface PaymentHandler {
   verifyWebhookSignature(body: string, signature: string): boolean;
   processPaymentCapturedWebhook(eventId: string, orderId: string, paymentId: string, payload: unknown): Promise<{ success: boolean; alreadyProcessed: boolean }>;
+  processPaymentFailedWebhook(eventId: string, orderId: string, payload: unknown): Promise<{ success: boolean; alreadyProcessed: boolean }>;
 }
 
 export async function registerRazorpayRoute(server: FastifyInstance, payments: PaymentHandler) {
@@ -30,6 +31,17 @@ export async function registerRazorpayRoute(server: FastifyInstance, payments: P
         const payment = parsed.data;
         const result = await payments.processPaymentCapturedWebhook(eventId, payment.order_id, payment.id, event);
         if (!result.success) return reply.status(503).send({ error: 'Payment requires reconciliation; retry later' });
+      }
+      if (event.event === 'payment.failed') {
+        const parsed = z.object({
+          id: z.string().min(1).max(255),
+          order_id: z.string().min(1).max(255),
+        }).safeParse(event.payload?.payment?.entity);
+        const eventId = request.headers['x-razorpay-event-id'];
+        if (!parsed.success || typeof eventId !== 'string' || !eventId || eventId.length > 255) {
+          return reply.status(400).send({ error: 'Invalid failed payment or missing event ID' });
+        }
+        await payments.processPaymentFailedWebhook(eventId, parsed.data.order_id, event);
       }
       return { status: 'ok' };
     });

@@ -4,11 +4,12 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "test": "pnpm --filter @bocardo/api exec tsx ../../tests/webhook_signature.test.ts && pnpm --filter @bocardo/api exec tsx src/services/razorpayRoute.test.ts && apps/api/node_modules/.bin/tsx apps/hotel/src/services/printer.test.ts && pnpm --filter @bocardo/api exec tsx ../../tests/platform_verification.test.ts",
+    "test": "node tests/run-all.mjs",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "tsc -p tests/tsconfig.json && turbo run typecheck",
+    "typecheck:tests": "tsc -p tests/tsconfig.json",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
   },

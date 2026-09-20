@@ -1,10 +1,14 @@
-import { GpsCoordinate } from '@bocardo/shared-types';
+import { GpsCoordinate, RiderLocationUpdatePayload } from '@bocardo/shared-types';
+import io, { Socket } from 'socket.io-client';
 
 type LocationListener = (coord: GpsCoordinate) => void;
 
 class RiderLocationStreamService {
   private isStreaming = false;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private socket: Socket | null = null;
+  private riderId: string | null = null;
+  private orderId: string | null = null;
   private currentCoord: GpsCoordinate = {
     latitude: 12.9716,
     longitude: 77.6408,
@@ -26,11 +30,26 @@ class RiderLocationStreamService {
     this.listeners.forEach((l) => l(this.currentCoord));
   }
 
+  setSocket(socket: Socket | null) {
+    this.socket = socket;
+  }
+
   /**
    * Starts Foreground GPS location streaming every 3 seconds.
-   * Performs Anti-Cheat validation rejecting mock GPS.
+   * Performs Anti-Cheat validation rejecting mock GPS and emits to Socket.io gateway.
    */
-  startStreaming(riderId: string, orderId?: string) {
+  startStreaming(riderId: string, orderId?: string, socketUrl?: string) {
+    this.riderId = riderId;
+    this.orderId = orderId || null;
+
+    if (socketUrl && !this.socket) {
+      try {
+        this.socket = io(socketUrl, { auth: { token: 'mock_token_rider_user' } });
+      } catch {
+        // Fallback for headless testing
+      }
+    }
+
     if (this.isStreaming) return;
     this.isStreaming = true;
     console.log(`🛰️ Foreground GPS Service started for Rider ${riderId} (Order: ${orderId || 'Idle'})`);
@@ -53,11 +72,32 @@ class RiderLocationStreamService {
       }
 
       this.notify();
-      // Socket emission is handled or received by server
+
+      // Emit live coordinate to server socket gateway
+      if (this.socket && this.socket.connected) {
+        const payload: RiderLocationUpdatePayload = {
+          riderId: this.riderId || riderId,
+          orderId: this.orderId || undefined,
+          coordinate: {
+            ...this.currentCoord,
+            timestamp: Date.now(),
+            accuracy: 10,
+          },
+        };
+        this.socket.emit('rider:location:update', payload);
+      }
     }, 3000);
   }
 
   stopStreaming() {
+    if (this.socket) {
+      try {
+        this.socket.disconnect();
+      } catch {
+        // safe no-op
+      }
+      this.socket = null;
+    }
     if (!this.isStreaming) return;
     this.isStreaming = false;
     if (this.timer) {

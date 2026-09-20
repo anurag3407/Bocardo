@@ -1,9 +1,9 @@
 export const theme = {
   colors: {
     primary: {
-      DEFAULT: '#FC8019', // Signature Swiggy warm saffron / high-conversion orange
-      dark: '#E26D0A',
-      light: '#FFF2E8',
+      DEFAULT: '#0D9488', // Bocardo signature teal - high-contrast CTA
+      dark: '#0F766E',
+      light: '#F0FDFA',
     },
     secondary: {
       DEFAULT: '#0F172A', // Slate deep navy

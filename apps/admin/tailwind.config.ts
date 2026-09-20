@@ -11,11 +11,11 @@ const config: Config = {
     extend: {
       colors: {
         bocardo: {
-          50: '#FFF7ED',
-          100: '#FFEDD5',
-          500: '#FC8019',
-          600: '#EA580C',
-          700: '#C2410C',
+          50: '#F0FDFA',
+          100: '#CCFBF1',
+          500: '#0D9488',
+          600: '#0F766E',
+          700: '#115E59',
         },
       },
     },

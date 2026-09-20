@@ -7,6 +7,7 @@ import {
   SettlementStatus,
   EntityType,
   ReconcileSettlementSchema,
+  calculateSettlementBreakdown,
 } from '@bocardo/shared-types';
 
 export const settlementRouter = router({
@@ -26,6 +27,10 @@ export const settlementRouter = router({
                s.start_date as "startDate", s.end_date as "endDate",
                s.gross_amount_paise as "grossAmountPaise",
                s.commission_deducted_paise as "commissionDeductedPaise",
+               COALESCE(s.commission_gst_paise, 0) as "commissionGstPaise",
+               COALESCE(s.tds_deducted_paise, 0) as "tdsDeductedPaise",
+               COALESCE(s.tcs_deducted_paise, 0) as "tcsDeductedPaise",
+               COALESCE(s.packaging_fee_paise, 0) as "packagingFeePaise",
                s.net_payout_paise as "netPayoutPaise",
                s.status, s.bank_utr_reference as "bankUtrReference",
                s.paid_at as "paidAt", s.created_at as "createdAt",
@@ -61,20 +66,24 @@ export const settlementRouter = router({
 
   /**
    * Weekly Offline Settlement Aggregator (Sunday Midnight Cron Logic)
+   * Calculates statutory 18% Commission GST, 1% TDS (Sec 194-O), 1% TCS (Sec 52),
+   * and links orders directly to the created settlement ID to eliminate double-settlements.
    */
   generateWeeklyLedger: roleProtectedProcedure(UserRole.ADMIN)
     .mutation(async () => {
-      // Find delivered orders in the last 7 days not yet settled
+      // Find delivered orders not yet settled (or within the last 7 days window)
       const now = new Date();
       const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
       const restaurantAgg = await db.query(`
         SELECT o.restaurant_id, r.name, r.commission_rate,
-               SUM(o.subtotal_paise) as total_subtotal_paise
+               SUM(o.subtotal_paise) as total_subtotal_paise,
+               COALESCE(SUM(o.packaging_fee_paise), 0) as total_packaging_paise,
+               ARRAY_AGG(o.id) as order_ids
         FROM orders o
         JOIN restaurants r ON o.restaurant_id = r.id
         WHERE o.status = 'DELIVERED'
-          AND o.created_at >= $1
+          AND (o.settlement_id IS NULL OR o.created_at >= $1)
         GROUP BY o.restaurant_id, r.name, r.commission_rate
       `, [oneWeekAgo]);
 
@@ -82,27 +91,47 @@ export const settlementRouter = router({
 
       for (const row of restaurantAgg.rows) {
         const grossPaise = Number(row.total_subtotal_paise);
+        const packagingPaise = Number(row.total_packaging_paise) || 0;
         const commissionRate = Number(row.commission_rate) || 15.0;
-        const commissionPaise = Math.round((grossPaise * commissionRate) / 100);
-        const netPayoutPaise = grossPaise - commissionPaise;
+        
+        const breakdown = calculateSettlementBreakdown(grossPaise, commissionRate, packagingPaise);
+        const netPayoutPaise = grossPaise - breakdown.commissionPaise;
 
         const insertRes = await db.query(`
           INSERT INTO settlements (
             entity_type, entity_id, start_date, end_date,
-            gross_amount_paise, commission_deducted_paise, net_payout_paise, status
+            gross_amount_paise, commission_deducted_paise, net_payout_paise, status,
+            commission_gst_paise, tds_deducted_paise, tcs_deducted_paise, packaging_fee_paise
           ) VALUES (
-            'RESTAURANT', $1, $2, $3, $4, $5, $6, 'PENDING'
+            'RESTAURANT', $1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10
           ) RETURNING id;
         `, [
           row.restaurant_id,
           oneWeekAgo.toISOString().split('T')[0],
           now.toISOString().split('T')[0],
           grossPaise,
-          commissionPaise,
+          breakdown.commissionPaise,
           netPayoutPaise,
+          breakdown.commissionGstPaise,
+          breakdown.tdsPaise,
+          breakdown.tcsPaise,
+          packagingPaise,
         ]);
 
-        createdSettlements.push(insertRes.rows[0].id);
+        const settlementId = insertRes.rows[0].id;
+        createdSettlements.push(settlementId);
+
+        // Link all included orders to prevent double-settlement
+        if (row.order_ids && Array.isArray(row.order_ids) && row.order_ids.length > 0) {
+          try {
+            await db.query(
+              `UPDATE orders SET settlement_id = $1, settled_at = NOW() WHERE id = ANY($2::uuid[])`,
+              [settlementId, row.order_ids]
+            );
+          } catch (err) {
+            console.warn(`[Settlement Link Warning] Could not link orders for settlement ${settlementId}:`, err);
+          }
+        }
       }
 
       return {

@@ -106,4 +106,21 @@ export const redisService = {
   releaseLock: async (lockKey: string): Promise<void> => {
     await redisService.del(lockKey);
   },
+
+  /**
+   * Gracefully closes the shared ioredis connection. Used by the test harness
+   * and during process shutdown so the event loop can drain.
+   */
+  shutdown: async (): Promise<void> => {
+    if (redisClient) {
+      try {
+        redisClient.disconnect();
+      } catch {
+        // already closed
+      }
+      redisClient = null;
+    }
+    isRedisConnected = false;
+    inMemoryCache.clear();
+  },
 };

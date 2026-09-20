@@ -1,0 +1,72 @@
+# Direct IP / default HTTP listener (for demo and IP access)
+:80 {
+    encode zstd gzip
+
+    @socket path /socket.io/*
+    reverse_proxy @socket api:3000 {
+        header_up X-Real-IP {remote_host}
+    }
+
+    @api path /trpc/* /health /api/* /webhooks/*
+    reverse_proxy @api api:3000 {
+        header_up X-Real-IP {remote_host}
+    }
+
+    reverse_proxy admin:3001
+}
+
+# Bocardo edge - automatic HTTPS via Let's Encrypt
+# Set DOMAIN env var, e.g. DOMAIN=bocardo.in
+
+api.{$DOMAIN} {
+    encode zstd gzip
+
+    # Socket.io websocket upgrade + long-polling
+    @socket path /socket.io/*
+    reverse_proxy @socket api:3000 {
+        header_up X-Real-IP {remote_host}
+    }
+
+    # tRPC + webhooks
+    reverse_proxy api:3000 {
+        header_up X-Real-IP {remote_host}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # API serves JSON only -> deny every browser capability (defense in depth)
+        Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox"
+        Cross-Origin-Resource-Policy "same-site"
+        Permissions-Policy "geolocation=(), camera=(), microphone=()"
+        -Server
+    }
+
+    log {
+        output file /data/access-api.log
+        format json
+    }
+}
+
+admin.{$DOMAIN} {
+    encode zstd gzip
+    reverse_proxy admin:3001
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Next.js requires inline hydration scripts; external script injection and
+        # framing remain blocked. Add nonce-based CSP once a proxy layer is in place.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.{$DOMAIN} wss://api.{$DOMAIN}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        Permissions-Policy "geolocation=(), camera=(), microphone=()"
+        -Server
+    }
+}
+
+# Root domain: redirect to admin for now (replace with marketing site)
+{$DOMAIN} {
+    redir https://admin.{$DOMAIN}{uri} permanent
+}
