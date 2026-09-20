@@ -4,6 +4,8 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "postinstall": "pnpm --filter @bocardo/shared-types build && pnpm --filter @bocardo/ui build && pnpm --filter @bocardo/api-client build",
+    "eas-build-post-install": "pnpm --filter @bocardo/shared-types build && pnpm --filter @bocardo/ui build && pnpm --filter @bocardo/api-client build",
     "test": "node tests/run-all.mjs",
     "build": "turbo run build",
     "dev": "turbo run dev",

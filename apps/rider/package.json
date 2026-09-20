@@ -2,8 +2,9 @@
   "name": "@bocardo/rider",
   "version": "1.0.0",
   "private": true,
-  "main": "expo-router/entry",
+  "main": "index.js",
   "scripts": {
+    "eas-build-post-install": "pnpm --filter @bocardo/shared-types build && pnpm --filter @bocardo/ui build && pnpm --filter @bocardo/api-client build",
     "dev": "expo start",
     "start": "expo start",
     "android": "expo start --android",
