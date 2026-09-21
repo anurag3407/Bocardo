@@ -101,6 +101,7 @@ declare const GEOFENCE_GATE_HANDOVER_RADIUS_METERS = 300;
 declare const GEOFENCE_EMERGENCY_RADIUS_METERS = 500;
 /**
  * Formats an integer paise amount into Indian Rupees string (e.g. 25050 -> "₹250.50").
+ * Uses a pure JavaScript formatter to avoid Hermes engine Intl crashes on Android devices.
  */
 declare function formatPaiseToRupees(paise: number | bigint): string;
 /**

@@ -194,14 +194,20 @@ var GEOFENCE_ARRIVAL_RADIUS_METERS = 100;
 var GEOFENCE_GATE_HANDOVER_RADIUS_METERS = 300;
 var GEOFENCE_EMERGENCY_RADIUS_METERS = 500;
 function formatPaiseToRupees(paise) {
-  const numPaise = typeof paise === "bigint" ? Number(paise) : paise;
-  const rupees = numPaise / 100;
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: numPaise % 100 === 0 ? 0 : 2,
-    maximumFractionDigits: 2
-  }).format(rupees);
+  const numPaise = typeof paise === "bigint" ? Number(paise) : Number(paise || 0);
+  const isNegative = numPaise < 0;
+  const absPaise = Math.abs(numPaise);
+  const rupees = Math.floor(absPaise / 100);
+  const remainder = absPaise % 100;
+  const rupeesStr = rupees.toString();
+  let lastThree = rupeesStr.substring(rupeesStr.length - 3);
+  const otherNumbers = rupeesStr.substring(0, rupeesStr.length - 3);
+  if (otherNumbers !== "") {
+    lastThree = "," + lastThree;
+  }
+  const formattedRupees = otherNumbers.replace(/\B(?=(\d{2})+(?!\d))/g, ",") + lastThree;
+  const formattedAmount = remainder === 0 ? formattedRupees : `${formattedRupees}.${remainder.toString().padStart(2, "0")}`;
+  return `${isNegative ? "-" : ""}\u20B9${formattedAmount}`;
 }
 function maskPhoneNumber(phone) {
   if (!phone) return "***";
