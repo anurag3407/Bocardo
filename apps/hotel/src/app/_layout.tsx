@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, useRouter } from 'expo-router';
-import { View, Text, TouchableOpacity, Switch, StyleSheet, SafeAreaView } from 'react-native';
+import { View, Text, TouchableOpacity, Switch, StyleSheet } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
 import { thermalPrinterService } from '../services/printer';
 import { kitchenAlarmService } from '../services/alarm';
+
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function HotelLayout() {
   const router = useRouter();
@@ -10,6 +14,10 @@ export default function HotelLayout() {
   const [printerStatus, setPrinterStatus] = useState(thermalPrinterService.getStatus());
   const [queueCount, setQueueCount] = useState(0);
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
 
   useEffect(() => {
     const unsubPrinter = thermalPrinterService.subscribe((status, count) => {
@@ -26,7 +34,8 @@ export default function HotelLayout() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Top Tablet/Mobile Operational Navigation Bar */}
       <View style={styles.topBar}>
         <View style={styles.brandCol}>
@@ -80,13 +89,17 @@ export default function HotelLayout() {
         </View>
       )}
 
-      <Stack screenOptions={{ headerShown: false }} />
+      <View style={styles.stackContainer}>
+        <Stack screenOptions={{ headerShown: false }} />
+      </View>
     </SafeAreaView>
+  </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#0F172A' },
+  stackContainer: { flex: 1 },
   topBar: {
     backgroundColor: '#1E293B',
     paddingHorizontal: 20,
@@ -153,14 +166,20 @@ const styles = StyleSheet.create({
 });
 
 export function ErrorBoundary({ error, retry }: { error: Error; retry: () => void }) {
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   return (
-    <SafeAreaView style={styles.errorContainer}>
-      <Text style={styles.errorIcon}>⚠️</Text>
-      <Text style={styles.errorTitle}>Kitchen Station Error</Text>
-      <Text style={styles.errorMessage}>{error?.message || 'Unable to start kitchen terminal.'}</Text>
-      <TouchableOpacity style={styles.retryButton} onPress={retry}>
-        <Text style={styles.retryButtonText}>Reload</Text>
-      </TouchableOpacity>
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.errorContainer}>
+        <Text style={styles.errorIcon}>⚠️</Text>
+        <Text style={styles.errorTitle}>Kitchen Station Error</Text>
+        <Text style={styles.errorMessage}>{error?.message || 'Unable to start kitchen terminal.'}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={retry}>
+          <Text style={styles.retryButtonText}>Reload</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
